@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MdWeChat · 断言台</title>
+<!--
+  必须和 index.html 用同一份主题变量表：
+  固化器读的是「元素在 .article 地基下的计算样式」，--mw-font-size / --mw-para-spacing
+  这些值只存在于 theme.css。断言台不加载它，验的就是一套浏览器默认样式，
+  通过与否都说明不了产物在真实预览里长什么样。
+  顺序放在内联样式之前，让本页自己的排版规则（body 的背景、内边距等）优先。
+-->
+<link rel="stylesheet" href="../src/theme.css">
+<style>
+  :root {
+    --ok: #1a7f37;
+    --bad: #c62828;
+    --off: #9aa0a6;
+    --border: #e2e4e8;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px 28px 60px;
+    background: #f2f3f5;
+    color: #1f2329;
+    font: 13px/1.7 -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    /* theme.css 给 body 设了 overflow:hidden（应用外壳是全屏不滚动的），
+       断言台是一张长页面，必须在这里把它改回来，否则结果表格的下半截点不到。 */
+    overflow: auto;
+  }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  h2 { font-size: 13px; margin: 26px 0 8px; font-weight: 600; }
+  .sub { color: #6b7280; font-size: 12px; margin-bottom: 18px; }
+  .card {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+  }
+  .hl { font-family: Consolas, "Courier New", monospace; }
+  .pick { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .summary b { font-size: 15px; }
+  .summary .ok { color: var(--ok); }
+  .summary .bad { color: var(--bad); }
+  table { border-collapse: collapse; width: 100%; background: #fff; font-size: 12px; }
+  th, td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
+  th { background: #fafbfc; font-weight: 600; white-space: nowrap; }
+  th .phase { color: var(--off); font-weight: 400; font-size: 11px; }
+  td.fn { font-family: Consolas, "Courier New", monospace; white-space: nowrap; }
+  td.cell { text-align: center; white-space: nowrap; }
+  td.cell.pass { color: var(--ok); }
+  td.cell.fail { color: var(--bad); background: #fff6f6; }
+  td.cell.off { color: var(--off); background: #fafafa; }
+  td.cell.err { color: var(--bad); }
+  .hint { color: #6b7280; font-size: 11px; margin-top: 6px; }
+  .empty { color: #6b7280; padding: 18px; text-align: center; border: 1px dashed #cfd3d9; border-radius: 6px; background: #fff; }
+  .rule { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px dashed #eceef1; }
+  .rule:last-child { border-bottom: 0; }
+  .rule .tag {
+    flex: 0 0 96px;
+    font-family: Consolas, "Courier New", monospace;
+    font-weight: 600;
+  }
+  .rule.is-off { color: var(--off); }
+  .rule.is-off .tag { color: var(--off); }
+</style>
+</head>
+<body>
+
+<h1>MdWeChat 断言台</h1>
+<div class="sub">
+  用下面的文件选择框多选 <span class="hl">fixtures/</span> 目录下的全部 12 个 md 文件。
+  本页不联网、不读磁盘路径：<span class="hl">file://</span> 下脚本被禁止直接读本地文件，只能由人来选。
+</div>
+
+<div class="card pick">
+  <input type="file" id="picker" multiple accept=".md,.markdown,.txt">
+  <span class="hint">按阶段启用断言：阶段编号大于当前阶段的断言不计分，以灰色显示。</span>
+</div>
+
+<div class="card summary" id="summary">
+  <div class="hl">还没有选择文件。</div>
+</div>
+
+<h2>断言清单</h2>
+<div class="card" id="legend"></div>
+
+<h2>结果</h2>
+<div id="result"><div class="empty">选择文件后这里会逐行显示每个文件的通过情况。</div></div>
+
+<!--
+  断言台验的是 pipeline 的真实产物，所以它必须和 index.html 加载同一套依赖：
+  vendor 四个库 + pipeline + inline-styles + sanitize。少加载一个（例如 inline-styles），
+  结果不是「断言失败」，而是 build 直接抛错、12 个样本全红，看起来像管线写错了。
+-->
+<script src="../src/util.js"></script>
+<script src="../src/whitelist.js"></script>
+<script src="../src/compat-rules.js"></script>
+<script src="../vendor/markdown-it.min.js"></script>
+<script src="../vendor/markdown-it-footnote.min.js"></script>
+<script src="../vendor/markdown-it-task-lists.min.js"></script>
+<script src="../vendor/highlight.min.js"></script>
+<script src="../src/pipeline.js"></script>
+<script src="../src/media.js"></script>
+<script src="../src/inline-styles.js"></script>
+<script src="../src/sanitize.js"></script>
+<script>
+/*
+ * 断言台的核心约定：每条断言带一个 phase 字段，
+ * 只有 phase <= CURRENT_PHASE 的才计分，其余渲染成灰色的「Pn 启用」。
+ *
+ * 为什么要按阶段启用，而不是现在就写七条能全过的断言：
+ * 现阶段的管线还没实现固化与归一，硬写让它们通过的断言等于什么都没验。
+ * 把未启用的断言也列出来，是为了让后面几个阶段的验收标准从第一天就可见，
+ * 而不是「写完了再想怎么验」。
+ */
+(function () {
+  'use strict';
+
+  const CURRENT_PHASE = 5; // P5
+
+  const BLOCK_TAGS = (window.MW.whitelist && MW.whitelist.BLOCK_TAGS) || [];
+
+  /** 遍历 root 自身与全部后代。断言要连根节点一起检查，根节点也在产物里。 */
+  function eachElement(root, fn) {
+    fn(root);
+    const all = root.querySelectorAll('*');
+    for (let i = 0; i < all.length; i++) fn(all[i]);
+  }
+
+  function tagOf(el) { return el.tagName.toLowerCase(); }
+
+  const ASSERTIONS = [
+    {
+      id: 'A1', phase: 0, title: '产物非空',
+      desc: 'pipeline 返回带内容的 root：有子节点，且 innerHTML 不是空白',
+      run: function (out) {
+        const children = out.root ? out.root.children.length : 0;
+        const ok = !!out.root && !out.meta.empty && out.html.trim().length > 0 && children > 0;
+        return {
+          ok: ok,
+          detail: '子节点 ' + children + ' 个，HTML ' + out.html.length + ' 字符'
+        };
+      }
+    },
+    {
+      id: 'A2', phase: 0, title: '产物内不含 class 属性',
+      desc: '微信必剥 class，产物依赖 class 等于样式一定失效，所以一个都不许有',
+      run: function (out) {
+        const hit = out.root.hasAttribute('class') ? out.root : out.root.querySelector('[class]');
+        if (!hit) return { ok: true, detail: '未发现 class 属性' };
+        return {
+          ok: false,
+          detail: '<' + tagOf(hit) + ' class="' + (hit.getAttribute('class') || '') + '">'
+        };
+      }
+    },
+    {
+      id: 'A3', phase: 2, title: '产物内不含 style / link 标签',
+      desc: '<style> 与 <link> 会被微信整段剥掉，留着只会让人误以为样式生效了',
+      run: function (out) {
+        const self = (tagOf(out.root) === 'style' || tagOf(out.root) === 'link') ? out.root : null;
+        const hit = self || out.root.querySelector('style, link');
+        if (!hit) return { ok: true, detail: '未发现 style / link 标签' };
+        return { ok: false, detail: '发现 <' + tagOf(hit) + '> 标签' };
+      }
+    },
+    {
+      id: 'A4', phase: 2, title: '产物内不含 flex / grid / position',
+      desc: '这三类布局能力会被微信过滤，写了也不生效，属于必须提前避开的坑',
+      run: function (out) {
+        const bad = [];
+        const isBad = function (text) {
+          return /display\s*:\s*(?:inline-)?(?:flex|grid)/i.test(text) || /position\s*:/i.test(text);
+        };
+        eachElement(out.root, function (el) {
+          const style = el.getAttribute('style') || '';
+          if (isBad(style)) bad.push('<' + tagOf(el) + ' style="' + style + '">');
+        });
+        const styles = out.root.querySelectorAll('style');
+        for (let i = 0; i < styles.length; i++) {
+          if (isBad(styles[i].textContent)) bad.push('<style> 内出现布局属性');
+        }
+        if (!bad.length) return { ok: true, detail: '未发现 flex / grid / position' };
+        return { ok: false, detail: bad.slice(0, 3).join('；') };
+      }
+    },
+    {
+      id: 'A5', phase: 2, title: '每个块级元素带内联 font-size',
+      desc: '不带内联字号的块级元素会被微信的默认字号接管，行内样式必须逐个写死',
+      run: function (out) {
+        const missing = [];
+        eachElement(out.root, function (el) {
+          const tag = tagOf(el);
+          if (tag === 'hr') return; // 分隔线没有文字，不需要字号
+          if (BLOCK_TAGS.indexOf(tag) < 0) return;
+          if (!/font-size\s*:/i.test(el.getAttribute('style') || '')) missing.push(tag);
+        });
+        if (!missing.length) return { ok: true, detail: '所有块级元素都带 font-size' };
+        return { ok: false, detail: missing.length + ' 个块级元素缺 font-size：' + missing.slice(0, 5).join(', ') };
+      }
+    },
+    {
+      id: 'A6', phase: 2, title: '没有元素把宽度写死超过 375px',
+      desc: '375px 是手机端可用内容宽度上界，写死超过它必然溢出或被截断',
+      run: function (out) {
+        const LIMIT = 375;
+        const bad = [];
+        eachElement(out.root, function (el) {
+          const style = el.getAttribute('style') || '';
+          const re = /(?:^|;)\s*(?:min-|max-)?width\s*:\s*([\d.]+)px/gi;
+          let m;
+          while ((m = re.exec(style)) !== null) {
+            if (Number(m[1]) > LIMIT) bad.push('<' + tagOf(el) + '> width:' + m[1] + 'px');
+          }
+          const attrW = Number(el.getAttribute('width'));
+          if (attrW > LIMIT) bad.push('<' + tagOf(el) + '> width="' + attrW + '"');
+        });
+        if (!bad.length) return { ok: true, detail: '未发现宽度写死超过 ' + LIMIT + 'px 的元素' };
+        return { ok: false, detail: bad.slice(0, 3).join('；') };
+      }
+    },
+    {
+      id: 'A7', phase: 5, title: '所有 img 使用 data: URI',
+      desc: '外链图片在粘贴时提示上传失败，必须先把图片转成 data: URI 再写进产物',
+      run: function (out) {
+        const imgs = out.root.querySelectorAll('img');
+        const bad = [];
+        for (let i = 0; i < imgs.length; i++) {
+          const src = imgs[i].getAttribute('src') || '';
+          if (!/^data:/i.test(src)) bad.push(src.slice(0, 60) || '(空 src)');
+        }
+        if (!bad.length) {
+          return { ok: true, detail: imgs.length ? '全部 ' + imgs.length + ' 张图片都是 data: URI' : '产物内没有图片' };
+        }
+        return { ok: false, detail: bad.length + ' 张图片不是 data: URI：' + bad.slice(0, 2).join(' | ') };
+      }
+    },
+    {
+      id: 'A8', phase: 1, title: '目录与 md 中的标题数量逐级一致',
+      desc: '按 level 逐级对账：outline（从渲染后的 DOM 收集）与 meta.headings（从 token 流统计）必须完全相等，允许 ±0',
+      run: function (out) {
+        // 两份数据来源不同：outline 来自渲染后的标题元素，meta.headings 来自解析出的 token 流。
+        // 都从 DOM 数就只是同一份数据自己和自己相等，验不出「标题渲染出来了但没进目录」。
+        const inOutline = {};
+        (out.outline || []).forEach(function (item) {
+          inOutline[item.level] = (inOutline[item.level] || 0) + 1;
+        });
+
+        const source = (out.meta && out.meta.headings) || {};
+        const diff = [];
+        for (let level = 1; level <= 6; level++) {
+          const fromMd = source[level] || 0;
+          const fromOutline = inOutline[level] || 0;
+          if (fromMd !== fromOutline) {
+            diff.push('h' + level + '：md ' + fromMd + ' / 目录 ' + fromOutline);
+          }
+        }
+        const totalMd = source.total || 0;
+        const totalOutline = (out.outline || []).length;
+        if (totalMd !== totalOutline) diff.push('合计：md ' + totalMd + ' / 目录 ' + totalOutline);
+
+        if (!diff.length) return { ok: true, detail: '共 ' + totalOutline + ' 个标题，逐级一致' };
+        return { ok: false, detail: diff.slice(0, 3).join('；') };
+      }
+    },
+    {
+      id: 'A9', phase: 1, title: '产物内不含 href="#…" 的链接',
+      desc: '公众号没有可用的锚点，页内跳转一定是死链；脚注上标与目录都必须降级成纯文本或 sup',
+      run: function (out) {
+        const hits = [];
+        eachElement(out.root, function (el) {
+          const href = el.getAttribute ? el.getAttribute('href') : null;
+          if (href && href.charAt(0) === '#') hits.push('<' + tagOf(el) + ' href="' + href + '">');
+        });
+        if (!hits.length) return { ok: true, detail: '未发现 # 开头的 href' };
+        return { ok: false, detail: hits.length + ' 处：' + hits.slice(0, 3).join('；') };
+      }
+    },
+    {
+      id: 'A10', phase: 5, title: '产物内不含 svg / canvas / iframe',
+      desc: '这三类标签会被微信整块剥掉（whitelist 的 DROP_TAGS 里就有它们），'
+        + '所以图形必须先在本机栅格化成 PNG 再写进产物',
+      run: function (out) {
+        const self = ['svg', 'canvas', 'iframe'].indexOf(tagOf(out.root)) >= 0 ? out.root : null;
+        const hit = self || out.root.querySelector('svg, canvas, iframe');
+        if (!hit) return { ok: true, detail: '未发现 svg / canvas / iframe' };
+        return { ok: false, detail: '发现 <' + tagOf(hit) + '> 标签' };
+      }
+    }
+  ];
+
+  const activeOnes = ASSERTIONS.filter(function (a) { return a.phase <= CURRENT_PHASE; });
+  const pendingOnes = ASSERTIONS.filter(function (a) { return a.phase > CURRENT_PHASE; });
+
+  /* ---------------------------- 渲染 ---------------------------- */
+
+  function renderLegend() {
+    const host = document.getElementById('legend');
+    host.textContent = '';
+    ASSERTIONS.forEach(function (a) {
+      const row = document.createElement('div');
+      row.className = 'rule' + (a.phase > CURRENT_PHASE ? ' is-off' : '');
+
+      const tag = document.createElement('div');
+      tag.className = 'tag';
+      tag.textContent = a.id + ' · ' + (a.phase > CURRENT_PHASE ? 'P' + a.phase + ' 启用' : '生效');
+      row.appendChild(tag);
+
+      const body = document.createElement('div');
+      const title = document.createElement('div');
+      title.textContent = a.title;
+      const desc = document.createElement('div');
+      desc.className = 'hint';
+      desc.textContent = a.desc;
+      body.appendChild(title);
+      body.appendChild(desc);
+      row.appendChild(body);
+
+      host.appendChild(row);
+    });
+  }
+
+  function renderSummary(stats) {
+    const host = document.getElementById('summary');
+    host.textContent = '';
+
+    const line1 = document.createElement('div');
+    const result = document.createElement('b');
+    result.className = stats.failedFiles === 0 ? 'ok' : 'bad';
+    result.textContent = stats.passedFiles + '/' + stats.totalFiles + ' 文件通过';
+    line1.appendChild(result);
+    const sep = document.createElement('span');
+    sep.textContent = ' · ' + stats.passedChecks + '/' + stats.totalChecks + ' 断言通过';
+    line1.appendChild(sep);
+    host.appendChild(line1);
+
+    const line2 = document.createElement('div');
+    line2.className = 'hint';
+    line2.textContent = '当前阶段 P' + CURRENT_PHASE + '：生效 ' + activeOnes.length + ' 条断言（'
+      + activeOnes.map(function (a) { return a.id; }).join('、') + '）；待启用 ' + pendingOnes.length + ' 条（'
+      + pendingOnes.map(function (a) { return a.id; }).join('、') + '），不计分。';
+    host.appendChild(line2);
+  }
+
+  function renderTable(results) {
+    const host = document.getElementById('result');
+    host.textContent = '';
+
+    if (!results.length) {
+      const empty = document.createElement('div');
+      empty.className = 'empty';
+      empty.textContent = '选择文件后这里会逐行显示每个文件的通过情况。';
+      host.appendChild(empty);
+      return;
+    }
+
+    const table = document.createElement('table');
+    const thead = document.createElement('thead');
+    const headRow = document.createElement('tr');
+
+    const thFile = document.createElement('th');
+    thFile.textContent = '文件';
+    headRow.appendChild(thFile);
+
+    ASSERTIONS.forEach(function (a) {
+      const th = document.createElement('th');
+      th.title = a.desc;
+      const name = document.createTextNode(a.id);
+      th.appendChild(name);
+      if (a.phase > CURRENT_PHASE) {
+        const phase = document.createElement('div');
+        phase.className = 'phase';
+        phase.textContent = 'P' + a.phase + ' 启用';
+        th.appendChild(phase);
+      }
+      headRow.appendChild(th);
+    });
+
+    const thVerdict = document.createElement('th');
+    thVerdict.textContent = '结论';
+    headRow.appendChild(thVerdict);
+
+    thead.appendChild(headRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    results.forEach(function (row) {
+      const tr = document.createElement('tr');
+
+      const tdFile = document.createElement('td');
+      tdFile.className = 'fn';
+      tdFile.textContent = row.name;
+      tr.appendChild(tdFile);
+
+      if (row.error) {
+        const tdErr = document.createElement('td');
+        tdErr.className = 'cell err';
+        tdErr.colSpan = ASSERTIONS.length;
+        tdErr.textContent = '读取失败：' + row.error;
+        tr.appendChild(tdErr);
+      } else {
+        ASSERTIONS.forEach(function (a) {
+          const td = document.createElement('td');
+          if (a.phase > CURRENT_PHASE) {
+            td.className = 'cell off';
+            td.textContent = 'P' + a.phase + ' 启用';
+          } else {
+            const r = row.checks[a.id];
+            td.className = 'cell ' + (r.ok ? 'pass' : 'fail');
+            td.textContent = r.ok ? '通过' : '失败';
+            td.title = r.detail;
+          }
+          tr.appendChild(td);
+        });
+      }
+
+      const tdVerdict = document.createElement('td');
+      if (row.error) {
+        tdVerdict.className = 'cell fail';
+        tdVerdict.textContent = '失败';
+      } else {
+        tdVerdict.className = 'cell ' + (row.passed ? 'pass' : 'fail');
+        tdVerdict.textContent = row.passed ? '通过' : '失败';
+      }
+      tr.appendChild(tdVerdict);
+
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(tbody);
+    host.appendChild(table);
+
+    const hint = document.createElement('div');
+    hint.className = 'hint';
+    hint.textContent = '鼠标悬停在「失败」单元格上可以看到具体原因。';
+    host.appendChild(hint);
+  }
+
+  /* ---------------------------- 跑断言 ---------------------------- */
+
+  async function runAll(files) {
+    const results = [];
+    const stats = { totalFiles: files.length, passedFiles: 0, failedFiles: 0, passedChecks: 0, totalChecks: 0 };
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const row = { name: file.name, checks: {}, error: '', passed: false };
+
+      try {
+        const res = await MW.util.readFile(file);
+        // P5 起 build() 是异步的：图片/公式/图表要在本机栅格化成 PNG 才算完。
+        // 这里少一个 await，后面拿到的就是 Promise 而不是产物，全部断言会一起报错。
+        const out = await MW.pipeline.build(res.text, { encoding: res.encoding, bytes: res.bytes });
+
+        let allOk = true;
+        activeOnes.forEach(function (a) {
+          const r = a.run(out);
+          row.checks[a.id] = r;
+          stats.totalChecks++;
+          if (r.ok) stats.passedChecks++; else allOk = false;
+        });
+        row.passed = allOk;
+      } catch (err) {
+        // 读文件失败也要计为一条失败，不能悄悄跳过：
+        // 「12 个文件里只跑了 11 个」和「11 个全过」是完全不同的结论。
+        row.error = err && err.message ? err.message : String(err);
+        row.passed = false;
+      }
+
+      if (row.passed) stats.passedFiles++; else stats.failedFiles++;
+      results.push(row);
+    }
+
+    renderSummary(stats);
+    renderTable(results);
+  }
+
+  document.getElementById('picker').addEventListener('change', function (event) {
+    const files = Array.prototype.slice.call(event.target.files || []);
+    if (!files.length) return;
+    runAll(files);
+  });
+
+  renderLegend();
+  renderSummary({ totalFiles: 0, passedFiles: 0, failedFiles: 0, passedChecks: 0, totalChecks: 0 });
+  renderTable([]);
+})();
+</script>
+</body>
+</html>

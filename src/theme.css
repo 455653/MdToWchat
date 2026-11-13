@@ -1,0 +1,796 @@
+/*
+ * theme.css
+ * 为什么主题变量放在 :root 而不是文章容器上：
+ * 这些值由参数面板的滑块写入 document.documentElement.style，
+ * 挂在 :root 上才能一处生效、全局可见，也方便后续「导出配置」时一次性读出来。
+ * --mw-* 是文章（产物）外观，--ui-* 是应用外壳外观，两者刻意分开：
+ * 外壳可以随便用 flex，产物不行。
+ */
+
+:root {
+  /* ---- 文章外观：由 src/panels/settings.js 写入，这里给出首屏兜底值 ---- */
+  --mw-font-size: 16px;
+  --mw-line-height: 1.75;
+  --mw-color: #3f3f3f;
+  --mw-accent: #0f7ae5;
+  --mw-padding: 0px;
+  --mw-para-spacing: 1.6em;
+
+  /* ---- 应用外壳 ---- */
+  --ui-bg: #f2f3f5;
+  --ui-panel: #ffffff;
+  --ui-border: #e2e4e8;
+  --ui-border-strong: #cfd3d9;
+  --ui-text: #1f2329;
+  --ui-muted: #8a9099;
+  --ui-accent: #0f7ae5;
+  --ui-danger: #d93026;
+  --ui-warn: #b26a00;
+  --topbar-h: 48px;
+}
+
+* { box-sizing: border-box; }
+
+/* 有些元素（如拖拽遮罩、文件选择器）用 hidden 属性控制显示，统一兜底 */
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--ui-bg);
+  color: var(--ui-text);
+  font: 13px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", sans-serif;
+  /* 全屏应用，页面自身不滚动；滚动交给内部面板，避免拖拽时窗口跳动 */
+  overflow: hidden;
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* ============ 顶栏 ============ */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 var(--topbar-h);
+  height: var(--topbar-h);
+  padding: 0 14px;
+  background: var(--ui-panel);
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.brand { display: flex; align-items: baseline; gap: 8px; flex: 0 0 auto; }
+.brand-name { font-size: 15px; font-weight: 600; letter-spacing: .2px; }
+.brand-ver { font-size: 11px; color: var(--ui-muted); }
+
+/* 文件名居中显示：flex:1 + text-align:center，两侧元素宽度不等也不影响居中观感 */
+.filename {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--ui-text);
+  padding: 3px 10px;
+  border-radius: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 虚线框 = 「还没选文件」，这是刻意的视觉状态，不是装饰 */
+.filename.is-empty {
+  color: var(--ui-muted);
+  border: 1px dashed var(--ui-border-strong);
+  max-width: 320px;
+  margin: 0 auto;
+}
+
+.topbar-actions { flex: 0 0 auto; }
+
+/* ============ 按钮 ============ */
+
+.btn {
+  font: inherit;
+  font-size: 12.5px;
+  padding: 5px 12px;
+  border-radius: 4px;
+  border: 1px solid var(--ui-border-strong);
+  background: var(--ui-panel);
+  color: var(--ui-text);
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--ui-muted); }
+.btn:active { background: #f6f7f9; }
+.btn-ghost { border-style: dashed; color: var(--ui-muted); }
+.btn-ghost:hover { color: var(--ui-text); }
+
+/* 实心主按钮：整个应用只有「复制到公众号」用它。
+   其余按钮一律保持白底，主操作才在「一眼扫过去」里站得出来——
+   如果三个复制相关按钮都染色，用户反而不知道先点哪个。 */
+.btn-primary {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent);
+  color: #ffffff;
+}
+.btn-primary:hover { border-color: #0c6bcc; background: #0c6bcc; }
+.btn-primary:active { background: #0a5eb4; }
+.btn:disabled { opacity: .5; cursor: default; }
+
+/* ============ 参数条 ============ */
+
+.params {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 6px 14px;
+  background: var(--ui-panel);
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.field { display: flex; align-items: center; gap: 6px; flex: 0 0 auto; }
+.field-label { font-size: 12px; color: var(--ui-muted); white-space: nowrap; }
+
+.field input[type="range"] { width: 104px; }
+.field input[type="color"] {
+  width: 28px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 3px;
+  background: none;
+  cursor: pointer;
+}
+
+/* 数值回显用等宽字体 + 定宽，避免数值变化时整条参数条左右抖 */
+.field-out {
+  display: inline-block;
+  min-width: 40px;
+  font: 11.5px/1 Consolas, "Courier New", monospace;
+  color: var(--ui-text);
+}
+
+/* ============ 主区 ============ */
+
+.main {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0; /* 关键：不写这行，子元素的 overflow 不会生效，textarea 会撑破布局 */
+}
+
+.pane { min-width: 0; display: flex; flex-direction: column; }
+.pane-input { flex: 1 1 50%; border-right: 1px solid var(--ui-border); background: var(--ui-panel); }
+.pane-output { flex: 1 1 50%; background: var(--ui-bg); }
+
+/* 输入区：无边框、等宽字体，尽量像编辑器而不是表单控件 */
+#mdInput {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  border: 0;
+  outline: none;
+  resize: none;
+  padding: 14px 16px;
+  background: transparent;
+  color: var(--ui-text);
+  font: 13px/1.7 Consolas, "Cascadia Mono", "Courier New", "Microsoft YaHei", monospace;
+  tab-size: 4;
+}
+#mdInput::placeholder { color: #a9aeb6; }
+
+/* ============ Tab ============ */
+
+.tabs {
+  display: flex;
+  flex: 0 0 auto;
+  height: 40px;
+  padding: 0 10px;
+  gap: 2px;
+  background: var(--ui-panel);
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.tab {
+  font: inherit;
+  font-size: 12.5px;
+  padding: 0 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--ui-muted);
+  cursor: pointer;
+}
+.tab:hover { color: var(--ui-text); }
+.tab.is-active {
+  color: var(--ui-accent);
+  border-bottom-color: var(--ui-accent);
+  font-weight: 600;
+}
+
+.tabbody { flex: 1 1 auto; min-height: 0; display: flex; }
+.tabpanel { display: none; }
+.tabpanel.is-active { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+
+.panel-slot {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px;
+}
+
+/* 占位块：后续阶段实现的面板先给出「什么时候能用」的说明 */
+.placeholder {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 18px 20px;
+  border: 1px dashed var(--ui-border-strong);
+  border-radius: 6px;
+  background: var(--ui-panel);
+  color: var(--ui-muted);
+  font-size: 12.5px;
+  line-height: 1.9;
+}
+.placeholder h3 { margin: 0 0 6px; font-size: 13px; color: var(--ui-text); font-weight: 600; }
+
+/* ============ 预览区（P3：双栏对照） ============
+   布局层级：preview-head（统计与开关） / preview-body（大纲栏 + 双栏）。
+   双栏必须各自能滚，所以每层的 min-height:0 都不能省——
+   少了任何一层，flex 子项就按内容高度撑开，滚动条会跑到整页上去。 */
+
+.preview-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px 14px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  min-height: 34px;
+  padding: 5px 10px 5px 14px;
+  color: var(--ui-muted);
+}
+
+.stats { font: 11.5px/1.6 Consolas, "Courier New", monospace; }
+
+/* ---------- 渲染进度条（P5） ----------
+   图片/公式/图表的内嵌要等懒加载库与栅格化，纯文字文档不显示它。 */
+.renderbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 2px 14px 6px;
+  font-size: 11.5px;
+  color: var(--ui-muted);
+}
+/* [hidden] 的 display:none 来自 UA 样式表，优先级低于上面 .renderbar 的 display:flex，
+   不补这一条，hidden 属性会被类选择器盖掉，进度条永远收不起来。 */
+.renderbar[hidden] { display: none; }
+.renderbar-label { flex: 0 0 auto; }
+.renderbar-track {
+  flex: 1 1 auto;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--ui-border);
+  overflow: hidden;
+}
+.renderbar-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  background: var(--ui-accent);
+  transition: width .15s ease;
+}
+.renderbar-count { flex: 0 0 auto; font: 11px/1.6 Consolas, "Courier New", monospace; }
+
+.preview-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.seg-label { font-size: 11.5px; color: var(--ui-muted); }
+
+/* 档位选择器：一段连体按钮，靠段内分隔线而不是外框，视觉上更像「一组互斥选项」 */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.seg-btn {
+  font: inherit;
+  font-size: 11.5px;
+  padding: 3px 9px;
+  border: 0;
+  border-right: 1px solid var(--ui-border-strong);
+  background: var(--ui-panel);
+  color: var(--ui-muted);
+  cursor: pointer;
+}
+.seg-btn:last-child { border-right: 0; }
+.seg-btn:hover { color: var(--ui-text); }
+.seg-btn.is-active { background: var(--ui-accent); color: #fff; }
+
+/* 已打开的开关态（深色背景 / 手机预览）：用底纹而不是颜色渐变，
+   因为按钮颜色已经被 .btn 占住了，再染色会和「主按钮」混淆 */
+.btn.is-on {
+  border-color: var(--ui-accent);
+  color: var(--ui-accent);
+  background: #eef5fd;
+}
+
+.preview-body {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* ---------- 大纲侧栏 ---------- */
+
+.outline-rail {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 188px;
+  min-width: 0;
+  min-height: 0;
+  background: var(--ui-panel);
+  border-right: 1px solid var(--ui-border);
+}
+.outline-rail.is-folded { flex-basis: 30px; }
+/* 折叠时只留头部那条窄边，正文和大纲标题一起收起来，
+   但折叠按钮必须留着——否则折起来就再也展不开了 */
+.outline-rail.is-folded .outline-list,
+.outline-rail.is-folded .outline-title { display: none; }
+.outline-rail.is-folded .outline-head { justify-content: center; padding: 0; }
+
+.outline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 4px 0 10px;
+  border-bottom: 1px solid var(--ui-border);
+}
+.outline-title { font-size: 11.5px; color: var(--ui-muted); }
+.outline-fold {
+  font: inherit;
+  font-size: 13px;
+  line-height: 1;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--ui-muted);
+  cursor: pointer;
+}
+.outline-fold:hover { background: #f4f6f8; color: var(--ui-text); }
+.outline-rail.is-folded .outline-fold { transform: rotate(180deg); }
+
+.outline-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 5px 4px 14px;
+}
+
+.outline-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.55;
+  padding: 3px 8px;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 0 4px 4px 0;
+  background: none;
+  color: var(--ui-text);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.outline-item:hover { background: #f4f6f8; }
+.outline-item.is-active {
+  color: var(--ui-accent);
+  border-left-color: var(--ui-accent);
+  font-weight: 600;
+  background: #eef5fd;
+}
+.outline-item[data-level="1"] { font-weight: 600; }
+.outline-item[data-level="3"] { font-size: 11.5px; color: var(--ui-muted); }
+
+.outline-empty {
+  padding: 14px 10px;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--ui-muted);
+}
+
+/* ---------- 双栏 ---------- */
+
+.split { display: flex; flex: 1 1 auto; min-width: 0; min-height: 0; }
+
+.device {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+/* 左栏占比由 JS 写 flex-basis（初始 50%），右栏吃掉剩下的 */
+.device-desktop { flex: 0 0 50%; }
+.device-phone { flex: 1 1 auto; }
+
+.device-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  color: var(--ui-muted);
+  background: var(--ui-panel);
+  border-bottom: 1px solid var(--ui-border);
+}
+.device-w { font-family: Consolas, "Courier New", monospace; color: var(--ui-text); }
+
+/* 灰白斜纹画布：用 repeating-linear-gradient 制造「这是舞台背景、不是正文」的心理暗示，
+   同时让白色纸面的边界一眼可见 */
+.device-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+  background: repeating-linear-gradient(45deg, #eceef1 0 10px, #f5f6f8 10px 20px);
+}
+
+/* 深色背景自查：只换预览容器的底色，产物一个字节都不动。
+   这就是 L25（暗黑模式）的自查工具——把正文放到深色底上，
+   看有没有「固定白底 + 固定黑字」这类在暗黑模式下会糊成一片的组合。 */
+.split.is-dark .device-scroll { background: #141416; }
+.split.is-dark .device-paper { background: #1e1e20; }
+.split.is-dark .device-head { background: #232326; border-bottom-color: #33333a; color: #a8adb5; }
+
+/* fit 的宽高由 view.js 按缩放比例写死；overflow:hidden 负责把未缩放的 1080px 布局盒裁掉，
+   否则滚动容器会按 1080px 算横向可滚动区域，右侧多出一大片空白 */
+.device-fit { overflow: hidden; margin: 0 auto; }
+.device-scaler { width: 1080px; transform-origin: 0 0; }
+
+.device-paper {
+  /* 必须是有定位的祖先：view.js 用 offsetTop 链算标题位置，
+     offsetParent 只会停在有定位的祖先上，停错一层算出来的就是错的滚动距离 */
+  position: relative;
+  background: #ffffff;
+  border-radius: 6px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .06), 0 6px 18px rgba(16, 24, 40, .07);
+  /* 左右各 16px 与固化舞台的 STAGE_PAD 一致：预览的正文宽度就等于产物在手机上的正文宽度 */
+  padding: 20px 16px;
+}
+.device-paper.is-desktop { width: 1080px; }
+.device-paper.is-phone {
+  width: var(--device-w, 375px);
+  margin: 0 auto;
+}
+
+/* ---------- 分隔条 ---------- */
+
+.splitter {
+  flex: 0 0 7px;
+  cursor: col-resize;
+  position: relative;
+  background: var(--ui-panel);
+  border-left: 1px solid var(--ui-border);
+  border-right: 1px solid var(--ui-border);
+}
+.splitter::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 1px;
+  height: 26px;
+  transform: translate(-50%, -50%);
+  background: var(--ui-border-strong);
+}
+.splitter:hover::after,
+.splitter.is-dragging::after { background: var(--ui-accent); }
+
+/* 拖动期间：指针挂在分隔条上（可能已经拖出窗口），
+   此时整页都应该保持 col-resize 光标并禁止选中文本，否则会顺手选中大片正文 */
+html.is-resizing,
+html.is-resizing * { cursor: col-resize !important; user-select: none !important; }
+
+/* ============ 文章容器（产物承载区） ============
+   这里所有尺寸都必须引用 --mw-* 变量，禁止写死：
+   写死的那一刻，「拖滑块 → 预览立刻变」这条反馈就断了。 */
+
+.article {
+  padding-left: var(--mw-padding);
+  padding-right: var(--mw-padding);
+}
+
+.article [data-mw-root] {
+  color: var(--mw-color);
+  font-size: var(--mw-font-size);
+  line-height: var(--mw-line-height);
+}
+
+/* 段间距走「下外边距」而不是「上外边距」：
+   固化读的就是这段规则，产物最终写进去的是 margin-bottom。
+   微信对首个子元素的「上外边距」处理不稳定（容易和外层容器合并掉），
+   下外边距没有这个问题，段与段之间的间距在手机上才是稳定的。 */
+.article [data-mw-root] > * { margin-top: 0; margin-bottom: var(--mw-para-spacing); }
+.article [data-mw-root] > *:last-child { margin-bottom: 0; }
+
+/* P0 用 <pre> 承载 md 原文；字号与行高走变量，让滑块反馈现在就成立 */
+.article [data-mw-root] pre {
+  margin: 0;
+  font-family: Consolas, "Cascadia Mono", "Courier New", "Microsoft YaHei", monospace;
+  font-size: var(--mw-font-size);
+  line-height: var(--mw-line-height);
+  color: var(--mw-color);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* 强调色在 P1 起作用于链接与强调元素；先写在这里，避免变量成为「写了没人用」的死值 */
+.article [data-mw-root] a,
+.article [data-mw-root] strong { color: var(--mw-accent); }
+
+/* ============ 拖拽遮罩 ============ */
+
+.dragmask {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 122, 229, .10);
+  border: 3px dashed var(--ui-accent);
+  color: var(--ui-accent);
+  font-size: 15px;
+  letter-spacing: .5px;
+  /* 遮罩自身必须放过鼠标事件，否则 dragover 全打在遮罩上，
+     虽然计数法能扛住，但会让 drop 的 target 变成遮罩，多一层不必要的变数 */
+  pointer-events: none;
+}
+.dragmask.is-on { display: flex; }
+
+/* ============ toast ============ */
+
+.toast-host {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-end;
+  pointer-events: none;
+}
+
+.toast {
+  max-width: 380px;
+  padding: 9px 13px;
+  border-radius: 5px;
+  border: 1px solid var(--ui-border-strong);
+  border-left: 3px solid var(--ui-muted);
+  background: var(--ui-panel);
+  color: var(--ui-text);
+  font-size: 12.5px;
+  box-shadow: 0 4px 14px rgba(16, 24, 40, .12);
+  opacity: 1;
+  transition: opacity .25s ease;
+}
+.toast.is-out { opacity: 0; }
+.toast--error { border-left-color: var(--ui-danger); }
+.toast--warn { border-left-color: var(--ui-warn); }
+.toast--ok { border-left-color: var(--ui-accent); }
+
+/* 第二行小字：同一张卡片里的补充提醒，压低对比度让主句仍然是主句 */
+.toast-sub {
+  margin-top: 3px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--ui-muted);
+}
+
+/* ============ 手机预览遮罩（二维码） ============ */
+
+.qr-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(15, 20, 28, .45);
+}
+
+.qr-card {
+  width: 320px;
+  max-width: 100%;
+  padding: 16px 18px 18px;
+  border-radius: 8px;
+  background: var(--ui-panel);
+  box-shadow: 0 12px 40px rgba(16, 24, 40, .28);
+}
+
+.qr-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.qr-card-head h3 { margin: 0; font-size: 14px; font-weight: 600; }
+
+/* 二维码必须站在纯白底上：浅底 + 反色会让部分机型的相机识别率明显下降 */
+.qr-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 196px;
+  padding: 10px;
+  margin-bottom: 10px;
+  background: #ffffff;
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+}
+.qr-box img,
+.qr-box canvas { display: block; }
+
+.qr-tip {
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--ui-muted);
+  text-align: center;
+}
+
+/* user-select:all 让「点一下就全选」，比让用户自己拖着选中整条地址可靠得多 */
+.qr-url {
+  min-height: 30px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  font: 12px/1.5 Consolas, "Courier New", monospace;
+  color: var(--ui-text);
+  background: #f6f7f9;
+  border: 1px solid var(--ui-border);
+  border-radius: 4px;
+  word-break: break-all;
+  user-select: all;
+}
+
+.qr-actions { display: flex; justify-content: flex-end; margin-bottom: 10px; }
+
+.qr-hint { font-size: 12px; line-height: 1.8; color: var(--ui-muted); }
+
+/* ============ 复制前确认框 ============
+   与二维码遮罩同一套做法：静态写在 HTML 里、用 hidden 属性开关。
+   区别是它必须能盖住任何东西（z-index 比二维码遮罩高），
+   因为「有内容会丢」这件事比二维码更要紧，不能被别的浮层压住。 */
+
+.confirm-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(15, 20, 28, .45);
+}
+
+.confirm-card {
+  width: 420px;
+  max-width: 100%;
+  padding: 16px 18px 18px;
+  border-radius: 8px;
+  background: var(--ui-panel);
+  box-shadow: 0 12px 40px rgba(16, 24, 40, .28);
+}
+
+.confirm-title { margin: 0 0 10px; font-size: 14px; font-weight: 600; }
+
+/* 风险条目按列表排：用户要看的不是「有几条」，而是「哪一条」 */
+.confirm-body { font-size: 12.5px; line-height: 1.8; color: var(--ui-text); }
+.confirm-body ul { margin: 6px 0 0; padding-left: 18px; }
+.confirm-body li { margin-bottom: 4px; color: var(--ui-muted); }
+.confirm-lead { margin: 0; }
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+/* ============ 只读预览页（?mode=preview） ============
+   这一页要能被「全选复制」，所以它必须是一张普通的长页面：
+   页面自己滚、白底、没有任何固定定位的元素。 */
+
+html.is-preview-mode,
+html.is-preview-mode body {
+  height: auto;
+  overflow: auto;
+  background: #ffffff;
+}
+
+/* 应用外壳整段收起来。用 display:none 而不是「不渲染」：
+   它在 HTML 里本来就在，隐藏掉不会产生任何新元素被一起复制走 */
+html.is-preview-mode .app,
+html.is-preview-mode .dragmask { display: none; }
+
+.preview-page {
+  /* 375 + 左右各 16px 内边距 = 固化舞台的宽度与内边距，
+     这样这一页的正文宽度和「粘进公众号后台」的正文宽度是同一个数 */
+  max-width: 375px;
+  margin: 0 auto;
+  padding: 20px 16px 64px;
+  background: #ffffff;
+}
+
+/* ============ 纯净复制页（?mode=copy） ============
+   这一页不模拟手机，只做一件事：让 Ctrl+A 选中的东西就是干净产物。
+   所以它比预览页更彻底——宽度自适应（不写死 375px），
+   除了正文容器一个额外元素都没有。 */
+
+html.is-copy-mode,
+html.is-copy-mode body {
+  height: auto;
+  overflow: auto;
+  background: #ffffff;
+}
+
+html.is-copy-mode .app,
+html.is-copy-mode .dragmask { display: none; }
+
+.copy-page {
+  /* 宽度自适应：不写 max-width。这一页的宽度不影响复制结果，
+     写死一个数只会在宽屏上多出两条白边，让用户怀疑「是不是没渲染全」 */
+  width: 100%;
+  padding: 20px 16px 64px;
+  background: #ffffff;
+}
+
+/* ============ 窄屏：左右改上下 ============ */
+
+@media (max-width: 800px) {
+  body { overflow: auto; }
+  .app { height: auto; min-height: 100vh; }
+  .main { flex-direction: column; }
+
+  .pane-input {
+    flex: 0 0 auto;
+    height: 34vh;
+    border-right: 0;
+    border-bottom: 1px solid var(--ui-border);
+  }
+  .pane-output { flex: 1 1 auto; min-height: 360px; }
+
+  /* 窄屏下面板本身就没多宽，再放一个大纲栏会把正文挤没，
+     双栏对照更是只能各剩半条——这两样都收起来，只留手机宽那一栏 */
+  .outline-rail { display: none; }
+  .device-desktop { display: none; }
+  .splitter { display: none; }
+
+  .device-scroll { padding: 10px; }
+  .device-paper { padding: 16px 14px; }
+
+  .filename.is-empty { max-width: 180px; }
+}

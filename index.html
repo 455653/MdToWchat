@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MdWeChat · Markdown 转公众号富文本</title>
+<!-- 主题变量与应用外壳样式，必须在脚本之前，避免首帧闪烁成空白 -->
+<link rel="stylesheet" href="src/theme.css">
+</head>
+<body>
+
+<div class="app">
+
+  <!-- 顶栏：品牌 / 文件名 / 打开按钮。文件名区在未加载文件时用虚线框表达「还没选文件」 -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-name">MdWeChat</span>
+      <span class="brand-ver">v0.1.0 · P5</span>
+    </div>
+    <div class="filename is-empty" id="fileName" title="当前文件名">未命名.md</div>
+    <div class="topbar-actions">
+      <button type="button" class="btn" id="btnPhone">手机预览</button>
+      <button type="button" class="btn" id="btnMapImages"
+              title="外链图片与相对路径在 file:// 下读不到像素，只能落占位图。选同名图片文件后，产物里就会换成真图">映射本地图片</button>
+      <button type="button" class="btn" id="btnOpen">打开 md</button>
+    </div>
+  </header>
+
+  <!-- 参数条：六个控件全部写入 CSS 自定义属性，改一个值预览立刻变 -->
+  <section class="params" id="paramBar">
+    <label class="field">
+      <span class="field-label">字号</span>
+      <input type="range" id="set-font-size" data-theme-key="fontSize" min="14" max="20" step="1">
+      <output class="field-out" data-out-for="fontSize"></output>
+    </label>
+    <label class="field">
+      <span class="field-label">行高</span>
+      <input type="range" id="set-line-height" data-theme-key="lineHeight" min="1.5" max="2.2" step="0.05">
+      <output class="field-out" data-out-for="lineHeight"></output>
+    </label>
+    <label class="field">
+      <span class="field-label">字色</span>
+      <input type="color" id="set-color" data-theme-key="color">
+    </label>
+    <label class="field">
+      <span class="field-label">强调色</span>
+      <input type="color" id="set-accent" data-theme-key="accent">
+    </label>
+    <label class="field">
+      <span class="field-label">两端缩进</span>
+      <input type="range" id="set-padding" data-theme-key="padding" min="0" max="24" step="2">
+      <output class="field-out" data-out-for="padding"></output>
+    </label>
+    <label class="field">
+      <span class="field-label">段间距</span>
+      <input type="range" id="set-para" data-theme-key="paraSpacing" min="0.8" max="2.4" step="0.1">
+      <output class="field-out" data-out-for="paraSpacing"></output>
+    </label>
+    <button type="button" class="btn btn-ghost" id="btnResetTheme">恢复默认</button>
+  </section>
+
+  <main class="main">
+    <!-- 左：Markdown 输入区 -->
+    <section class="pane pane-input">
+      <textarea id="mdInput" spellcheck="false"
+        placeholder="在这里写 Markdown，或把 .md 文件拖到窗口任意位置，也可以点右上角「打开 md」。&#10;预览显示的已是固化后的产物——它就是要被复制出去的那一份，不会「预览一套、复制另一套」。"></textarea>
+    </section>
+
+    <!-- 右：预览 / 体检 / 登记 -->
+    <section class="pane pane-output">
+      <nav class="tabs" id="tabs">
+        <button type="button" class="tab is-active" data-tab="preview">预览</button>
+        <button type="button" class="tab" data-tab="audit">体检</button>
+        <button type="button" class="tab" data-tab="report">登记</button>
+      </nav>
+
+      <div class="tabbody">
+        <div class="tabpanel is-active" data-panel="preview">
+
+          <div class="preview-head">
+            <span class="stats" id="stats">0 字符 · 0 行 · 0 B</span>
+            <div class="preview-tools">
+              <!-- 复制到公众号是全工具的主操作，所以它是唯一一个实心按钮。
+                   「复制源码」与「打开纯净页」是它的两条退路：
+                   前者给公众号的源码模式，后者给「我自己 Ctrl+A」的人。 -->
+              <button type="button" class="btn btn-primary" id="btnCopy"
+                      title="把预览里的产物写进剪贴板（Ctrl+Enter）">复制到公众号</button>
+              <button type="button" class="btn" id="btnCopySrc"
+                      title="复制产物的 HTML 源码（带缩进），可用于公众号的源码模式或排查问题">复制源码</button>
+              <button type="button" class="btn" id="btnCopyPage"
+                      title="在新标签页里只显示产物，没有任何外壳，可以在那里手动 Ctrl+A、Ctrl+C">打开纯净页</button>
+              <span class="seg-label">手机宽度</span>
+              <!-- 三档只改右侧容器宽度，不重跑管线：产物恒按 375px 固化（P2 定下的基准），
+                   换档位看的是「同一份产物换个机身会不会被挤坏」，重固化一次反而把这件事掩盖了 -->
+              <div class="seg" id="deviceSeg">
+                <button type="button" class="seg-btn is-active" data-device="0" title="iPhone SE">375</button>
+                <button type="button" class="seg-btn" data-device="1" title="iPhone 15 Pro">393</button>
+                <button type="button" class="seg-btn" data-device="2" title="Android 常见机">360</button>
+              </div>
+              <button type="button" class="btn btn-ghost" id="btnDark" aria-pressed="false"
+                      title="把预览容器的背景改成深色，用来检查固定色值在暗黑模式下会不会看不清">深色背景</button>
+            </div>
+          </div>
+
+          <!-- 渲染进度条（P5）：图片/公式/图表内嵌是异步的，纯文字文档不会显示它。
+               hidden 属性由 app.js 控制；它默认 display:none 的优先级低于类选择器，
+               所以 theme.css 里另有一条 [hidden] 规则兜底。 -->
+          <div class="renderbar" id="renderBar" hidden>
+            <span class="renderbar-label" id="renderBarLabel">正在渲染…</span>
+            <span class="renderbar-track"><span class="renderbar-fill" id="renderBarFill"></span></span>
+            <span class="renderbar-count" id="renderBarCount">0 / 0</span>
+          </div>
+
+          <div class="preview-body" id="previewBody">
+
+            <!-- 大纲侧栏：数据来自 window.MW.outline，点击按 data-mw-id 跳转 -->
+            <aside class="outline-rail" id="outlineRail">
+              <div class="outline-head">
+                <span class="outline-title">大纲</span>
+                <button type="button" class="outline-fold" id="btnOutlineFold" title="折叠大纲" aria-expanded="true">‹</button>
+              </div>
+              <nav class="outline-list" id="outlineList"></nav>
+            </aside>
+
+            <div class="split" id="split">
+
+              <!-- 左栏：桌面宽 1080px。整块缩放后显示，否则 1080px 在栏目里只能看到左上角 -->
+              <section class="device device-desktop" id="deviceDesktop">
+                <div class="device-head">
+                  <span class="device-name">桌面宽</span>
+                  <span class="device-w">1080px</span>
+                </div>
+                <div class="device-scroll" id="desktopScroll">
+                  <!-- fit 的宽高由 JS 按缩放比例写死：transform 不参与布局，
+                       不算这一层的话滚动条长度和眼睛看到的内容对不上 -->
+                  <div class="device-fit" id="desktopFit">
+                    <div class="device-scaler" id="desktopScaler">
+                      <div class="device-paper is-desktop" id="desktopPaper">
+                        <div class="article" id="desktopArticle"></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <!-- 分隔条：两栏比例靠拖它调整，默认 50/50 -->
+              <div class="splitter" id="splitter" title="拖动调整两栏比例"></div>
+
+              <!-- 右栏：手机宽。三档切换只改这里的 --device-w -->
+              <section class="device device-phone" id="devicePhone">
+                <div class="device-head">
+                  <span class="device-name" id="phoneName">iPhone SE</span>
+                  <span class="device-w" id="phoneWidth">375px</span>
+                </div>
+                <div class="device-scroll" id="phoneScroll">
+                  <div class="device-paper is-phone" id="phonePaper">
+                    <div class="article" id="phoneArticle"></div>
+                  </div>
+                </div>
+              </section>
+
+            </div>
+          </div>
+        </div>
+
+        <div class="tabpanel" data-panel="audit">
+          <div class="panel-slot" id="auditHost"></div>
+        </div>
+
+        <div class="tabpanel" data-panel="report">
+          <div class="panel-slot" id="reportHost"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- 拖拽遮罩：默认 display:none，靠 .is-on 打开。不用 hidden 属性，因为 CSS 里它是 flex 容器 -->
+<div class="dragmask" id="dragMask">松手即可载入 .md 文件</div>
+
+<!--
+  手机预览遮罩。刻意静态写在 HTML 里而不是运行时拼：
+  结构一眼可见，也不会出现「点两次叠两个遮罩」。
+  二维码完全在本机生成，地址不会发给任何在线服务。
+-->
+<div class="qr-mask" id="qrMask" hidden>
+  <div class="qr-card">
+    <div class="qr-card-head">
+      <h3>手机预览</h3>
+      <button type="button" class="btn btn-ghost" id="btnQrClose">关闭</button>
+    </div>
+    <div class="qr-box" id="qrBox"></div>
+    <div class="qr-url" id="qrUrl"></div>
+    <div class="qr-actions">
+      <button type="button" class="btn" id="btnQrCopy">复制地址</button>
+    </div>
+    <div class="qr-hint" id="qrHint">
+      手机和电脑要连同一个 WiFi。电脑上得先运行 serve.cmd，这个地址才打得开；
+      关掉 serve.cmd 的窗口，手机上就访问不到了。
+    </div>
+  </div>
+</div>
+
+<!--
+  只读预览页的宿主（?mode=preview 用）。
+  刻意静态写在 HTML 里、内部只放正文容器：这一页是用户唯一可能「全选复制」的页面，
+  任何多余元素都会跟着被复制走，所以这里一个按钮、一条提示都不放。
+-->
+<div class="preview-page" id="previewPage" hidden>
+  <div class="article" id="previewArticle"></div>
+</div>
+
+<!--
+  纯净复制页的宿主（?mode=copy 用）。
+  与只读预览页的唯一区别是宽度：预览页写死 375px（对齐固化基准），
+  这一页要「宽度自适应」——它不模拟手机，只负责让用户全选时拿到干净内容。
+  两者刻意用不同的 class：一个 class 同时承担两种宽度是说不清的。
+-->
+<div class="copy-page" id="copyPage" hidden>
+  <div class="article" id="copyArticle"></div>
+</div>
+
+<!--
+  复制前确认框。
+  为什么不用 window.confirm：原生 confirm 会吃掉落这次点击的「用户手势」，
+  等它关掉之后再调 navigator.clipboard.write 就会被浏览器拒掉，
+  表现成「点了确定反而复制失败」，而且只在部分浏览器上复现。
+  用自己的框，确认按钮的那一次点击本身就是手势，剪贴板这条路才不会断。
+-->
+<div class="confirm-mask" id="confirmMask" hidden>
+  <div class="confirm-card">
+    <h3 class="confirm-title">复制前提醒</h3>
+    <div class="confirm-body" id="confirmBody"></div>
+    <div class="confirm-actions">
+      <button type="button" class="btn" id="btnConfirmCancel">先不复制</button>
+      <button type="button" class="btn btn-primary" id="btnConfirmOk">继续复制</button>
+    </div>
+  </div>
+</div>
+
+<!-- 隐藏的文件选择器。file:// 下不能 fetch，这是唯一合法的本地文件入口 -->
+<input type="file" id="filePicker" accept=".md,.markdown,.txt" hidden>
+<!-- 图片映射入口：把「同名图片」的像素交给 P5 内嵌，替代读不到的外链 src -->
+<input type="file" id="imagePicker" accept="image/*" multiple hidden>
+
+<!--
+  加载顺序即依赖顺序，全部用经典 script（非 module）：
+  file:// 下 type="module" 会被 CORS 拦掉；util 必须最先，app 必须最后。
+
+  vendor 的库排在 pipeline 之前：pipeline 在解析时才去读 window.markdownit
+  这些东西。它们加载失败不会报错（file:// 下的 script 静默失败），
+  所以 pipeline 里另有一道存在性检查，缺库时在预览区点名说缺哪个文件。
+
+  qrcode.min.js 只有首屏 20KB，且「手机预览」按钮随时可能被点，
+  静态引入比动态注入省掉一次竞态；它不参与渲染，不影响首屏 1 秒可交互。
+
+  media.js 排在 pipeline.js 之后：pipeline 在 build() 里调用 MW.media.prepare / render。
+  但 MathJax（约 2MB）与 Mermaid（约 3.2MB）刻意不静态引入——
+  media.js 在真正解析到公式/图表时才用动态 script 注入它们，首屏因此不受影响。
+-->
+<script src="src/util.js"></script>
+<script src="src/whitelist.js"></script>
+<script src="src/compat-rules.js"></script>
+<script src="vendor/markdown-it.min.js"></script>
+<script src="vendor/markdown-it-footnote.min.js"></script>
+<script src="vendor/markdown-it-task-lists.min.js"></script>
+<script src="vendor/highlight.min.js"></script>
+<script src="vendor/qrcode.min.js"></script>
+<script src="src/pipeline.js"></script>
+<script src="src/media.js"></script>
+<script src="src/inline-styles.js"></script>
+<script src="src/sanitize.js"></script>
+<script src="src/clipboard.js"></script>
+<script src="src/sync.js"></script>
+<script src="src/panels/settings.js"></script>
+<script src="src/panels/audit.js"></script>
+<script src="src/panels/report.js"></script>
+<script src="src/view.js"></script>
+<script src="src/preview-mode.js"></script>
+<script src="src/app.js"></script>
+</body>
+</html>

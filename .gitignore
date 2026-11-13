@@ -1,0 +1,11 @@
+# IDE / 编辑器
+.idea/
+.vscode/
+
+# 本地截图与工具产物
+.screenshots/
+.trae-html-share-packages/
+
+# 系统文件
+Thumbs.db
+.DS_Store
