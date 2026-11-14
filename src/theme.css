@@ -122,7 +122,41 @@ body {
 }
 .btn-primary:hover { border-color: #0c6bcc; background: #0c6bcc; }
 .btn-primary:active { background: #0a5eb4; }
-.btn:disabled { opacity: .5; cursor: default; }
+/* 禁用态。
+   三件事一起做，缺一条都会让人误判：
+     1. 压暗 + 换光标，让「不能点」在视觉上一眼可见；
+     2. 把 hover / active 的反馈也一并掐掉——禁用元素上还留 hover 高亮，
+        等于在说「它其实是能点的」，用户会反复点；
+     3. 用 :disabled 而不是自己加 .is-disabled 类，才能吃到浏览器原生的
+        键盘可达性与语义（读屏器会念出「不可用」）。 */
+.btn:disabled,
+.seg-btn:disabled,
+.tab:disabled,
+.outline-item:disabled,
+.footer-btn:disabled {
+  opacity: .45;
+  cursor: default;
+}
+.btn:disabled,
+.btn:disabled:hover,
+.btn:disabled:active,
+.btn-primary:disabled,
+.btn-primary:disabled:hover,
+.btn-primary:disabled:active {
+  border-color: var(--ui-border-strong);
+  background: var(--ui-panel);
+  color: var(--ui-muted);
+}
+.btn-primary:disabled,
+.btn-primary:disabled:hover {
+  border-color: var(--ui-accent);
+  background: var(--ui-accent);
+  color: #ffffff;
+}
+.seg-btn:disabled,
+.seg-btn:disabled:hover { color: var(--ui-muted); background: var(--ui-panel); }
+.footer-btn:disabled,
+.footer-btn:disabled:hover { color: var(--ui-muted); background: none; }
 
 /* ============ 参数条 ============ */
 
@@ -211,6 +245,7 @@ body {
   cursor: pointer;
 }
 .tab:hover { color: var(--ui-text); }
+.tab:active { background: #f6f7f9; }
 .tab.is-active {
   color: var(--ui-accent);
   border-bottom-color: var(--ui-accent);
@@ -314,6 +349,7 @@ body {
 }
 .seg-btn:last-child { border-right: 0; }
 .seg-btn:hover { color: var(--ui-text); }
+.seg-btn:active { background: #eef0f3; }
 .seg-btn.is-active { background: var(--ui-accent); color: #fff; }
 
 /* 已打开的开关态（深色背景 / 手机预览）：用底纹而不是颜色渐变，
@@ -400,6 +436,7 @@ body {
   text-overflow: ellipsis;
 }
 .outline-item:hover { background: #f4f6f8; }
+.outline-item:active { background: #e9edf1; }
 .outline-item.is-active {
   color: var(--ui-accent);
   border-left-color: var(--ui-accent);
@@ -552,7 +589,12 @@ html.is-resizing * { cursor: col-resize !important; user-select: none !important
 /* ============ 拖拽遮罩 ============ */
 
 .dragmask {
-  display: none;
+  /* 始终是 flex 容器，靠 opacity + visibility 显隐。
+     为什么不用 display:none ↔ display:flex：display 不在可过渡属性里，
+     切换时会「硬闪」一下，而拖拽遮罩正是最需要「出现得柔和」的一处——
+     鼠标从窗口边缘划进来时，硬闪会让人以为页面出了错。
+     120ms 是「看得出在出现、又不至于滞后于鼠标」的长度。 */
+  display: flex;
   position: fixed;
   inset: 0;
   z-index: 50;
@@ -566,8 +608,13 @@ html.is-resizing * { cursor: col-resize !important; user-select: none !important
   /* 遮罩自身必须放过鼠标事件，否则 dragover 全打在遮罩上，
      虽然计数法能扛住，但会让 drop 的 target 变成遮罩，多一层不必要的变数 */
   pointer-events: none;
+  opacity: 0;
+  /* visibility 一起参与过渡，是为了让它在淡出「结束之后」才真正不可见。
+     若立刻置为 hidden，元素会在透明度还很高的时候就退出无障碍树与绘制。 */
+  visibility: hidden;
+  transition: opacity .12s ease, visibility .12s ease;
 }
-.dragmask.is-on { display: flex; }
+.dragmask.is-on { opacity: 1; visibility: visible; }
 
 /* ============ toast ============ */
 
@@ -768,6 +815,400 @@ html.is-copy-mode .dragmask { display: none; }
   background: #ffffff;
 }
 
+/* ============ 体检 / 登记 / 规则（P6） ============
+   三个面板共用一套零件，所以样式也写在一起：
+   pan-* 是展示件（分组、条目、键值、徽标），form-* 是表单件，
+   draft-* / shot-* / prompt-* / rules-editor 各自只服务一处。
+   max-width 收在 960px：这几页的内容是「读结论」，不是「看排版」，
+   宽屏下让一行文字拉到 1600px 会让人找不到下一行的开头。 */
+
+.pan-head,
+.pan-toolbar,
+.pan-group,
+.pan-alert,
+.pan-note { max-width: 960px; }
+
+/* ---------- 页首总评 ---------- */
+
+.pan-head { margin-bottom: 14px; }
+
+.pan-summary {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.65;
+  color: var(--ui-text);
+}
+/* 总评的颜色就是结论的颜色：有高风险偏红、有待确认偏黄、没有就保持正文色。
+   三态都染成彩色反而分不出轻重。 */
+.pan-summary.is-bad { color: var(--ui-danger); }
+.pan-summary.is-warn { color: var(--ui-warn); }
+
+.pan-meta {
+  margin-top: 4px;
+  font-size: 11.5px;
+  line-height: 1.75;
+  color: var(--ui-muted);
+}
+
+/* 管线 bug 的告警框：这是「我们自己错了」，不是「微信会吃」，
+   所以用红底把它跟下面的分组列表在视觉上完全隔开——
+   混在 ⚠️ 条目里，用户会以为又是微信的锅。 */
+.pan-alert {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: #8a1f18;
+  background: #fdeceb;
+  border: 1px solid #f5c6c2;
+  border-radius: 6px;
+}
+.pan-alert strong { font-weight: 600; }
+
+.pan-note {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--ui-muted);
+  background: #f7f8fa;
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+}
+
+/* ---------- 工具条（导入 / 导出） ---------- */
+
+.pan-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+/* 说明文字跟在按钮后面、占满剩下的宽度；不给 flex:1 的话它会跟按钮挤在一起 */
+.pan-toolbar .pan-meta {
+  flex: 1 1 260px;
+  margin-top: 0;
+}
+
+/* ---------- 分组卡片 ---------- */
+
+.pan-group {
+  margin-bottom: 16px;
+  background: var(--ui-panel);
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  /* 圆角要盖住子元素（分组头有底色），不收边就会在四角露出方角 */
+  overflow: hidden;
+}
+
+.pan-group-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  background: #fafbfc;
+  border-bottom: 1px solid var(--ui-border);
+}
+.pan-group-title { font-size: 13px; font-weight: 600; color: var(--ui-text); }
+.pan-group-hint { font-size: 11.5px; color: var(--ui-muted); }
+
+/* ---------- 可展开条目 ---------- */
+
+.pan-item { border-bottom: 1px solid var(--ui-border); }
+.pan-item:last-child { border-bottom: 0; }
+/* 左侧色条用 inset box-shadow 而不是 border-left：
+   border 会改变盒宽，同一列表里有的条目多一条边会齐齐错位 */
+.pan-item.is-bad { box-shadow: inset 3px 0 0 var(--ui-danger); }
+.pan-item.is-warn { box-shadow: inset 3px 0 0 var(--ui-warn); }
+/* 没有 --ui-ok 变量：绿色在整个应用里只用于「安全」这一处，不值得为它开一个变量 */
+.pan-item.is-ok { box-shadow: inset 3px 0 0 #2f9e44; }
+
+.pan-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 14px;
+  font: inherit;
+  text-align: left;
+  color: var(--ui-text);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.pan-item-head:hover { background: #f7f8fa; }
+
+.pan-item-title { font-size: 12.5px; font-weight: 600; color: var(--ui-text); }
+.pan-item-target {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--ui-muted);
+  /* 现象描述可能很长，但不该把整条撑开——条目列表的可读性靠「整齐的行高」 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.item-time { font-size: 11px; color: var(--ui-muted); white-space: nowrap; }
+
+.pan-caret {
+  flex: 0 0 auto;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--ui-muted);
+}
+/* 展开态把指向右的 › 转成朝下，补上「这条现在开着」的视觉反馈 */
+.pan-item-head[aria-expanded="true"] .pan-caret { transform: rotate(90deg); }
+
+.pan-item-body {
+  padding: 6px 14px 12px;
+  background: #fcfdfe;
+  border-top: 1px dashed var(--ui-border);
+}
+
+/* ---------- 键值行 ---------- */
+
+.pan-kv {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.pan-kv-k { color: var(--ui-muted); }
+.pan-kv-v { color: var(--ui-text); word-break: break-word; }
+
+/* 命中的写法按代码排：用户要拿去对照产物，等宽字体下才好扫 */
+.pan-evidence {
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: #f5f6f8;
+  border: 1px solid var(--ui-border);
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.pan-evidence ul { margin: 4px 0 0; padding-left: 18px; }
+.pan-evidence li {
+  font: 11.5px/1.7 Consolas, "Courier New", monospace;
+  word-break: break-all;
+}
+
+/* ---------- 徽标 ---------- */
+
+.pan-badge {
+  flex: 0 0 auto;
+  min-width: 22px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.6;
+  text-align: center;
+  white-space: nowrap;
+  color: var(--ui-muted);
+  background: #eef0f3;
+  border: 1px solid transparent;
+  border-radius: 9px;
+}
+.pan-badge.is-bad { color: var(--ui-danger); background: #fdeceb; border-color: #f5c6c2; }
+.pan-badge.is-warn { color: var(--ui-warn); background: #fdf3e3; border-color: #f0d9ad; }
+.pan-badge.is-ok { color: #2f9e44; background: #eaf6ec; border-color: #c7e6cd; }
+
+/* ---------- 表单 ---------- */
+
+.form-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+.form-label {
+  padding-top: 5px;
+  font-size: 12px;
+  color: var(--ui-muted);
+  white-space: nowrap;
+}
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.form-field input[type="text"],
+.form-field select,
+.form-field textarea {
+  width: 100%;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--ui-text);
+  background: var(--ui-panel);
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 4px;
+  outline: none;
+}
+.form-field select { cursor: pointer; }
+.form-field textarea { min-height: 46px; line-height: 1.7; resize: vertical; }
+.form-field input[type="text"]:focus,
+.form-field select:focus,
+.form-field textarea:focus { border-color: var(--ui-accent); }
+.form-field input[type="checkbox"] { accent-color: var(--ui-accent); }
+
+.form-hint { font-size: 11.5px; line-height: 1.7; color: var(--ui-muted); }
+
+.form-checks { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.form-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--ui-text);
+  cursor: pointer;
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* ---------- 规则草稿 ---------- */
+
+.draft-box {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #fbfcfe;
+  border: 1px solid var(--ui-border);
+  /* 左侧粗边 = 「这是草稿，还没进规则表」，让它在条目详情里一眼认得出来 */
+  border-left: 3px solid var(--ui-accent);
+  border-radius: 6px;
+}
+.draft-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+/* ---------- 截图 ---------- */
+
+.shot-box {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.shot-thumb {
+  max-width: 200px;
+  max-height: 160px;
+  background: #ffffff;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 4px;
+}
+
+/* ---------- 规则表编辑器 ---------- */
+
+.rules-editor {
+  width: 100%;
+  min-height: 280px;
+  padding: 10px 12px;
+  font: 12px/1.65 Consolas, "Cascadia Mono", "Courier New", monospace;
+  color: var(--ui-text);
+  background: #fbfcfd;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 6px;
+  outline: none;
+  resize: vertical;
+  tab-size: 2;
+}
+.rules-editor:focus { border-color: var(--ui-accent); }
+
+/* 报错默认是红色；「校验通过」那句提示自身带 .form-hint，会被下面的规则拉回灰色 */
+.editor-errors { font-size: 12px; line-height: 1.8; color: var(--ui-danger); }
+.editor-errors .form-hint { color: var(--ui-muted); }
+
+/* ---------- 修复提示词弹窗 ----------
+   z-index 必须高于复制前确认框（70）：提示词是用户主动点开的，
+   不能被上一层的浮层压住。 */
+
+.prompt-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(15, 20, 28, .45);
+}
+
+.prompt-card {
+  display: flex;
+  flex-direction: column;
+  width: 720px;
+  max-width: 100%;
+  max-height: 100%;
+  padding: 14px 16px 16px;
+  background: var(--ui-panel);
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(16, 24, 40, .28);
+}
+.prompt-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; }
+.prompt-title { margin: 0; font-size: 14px; font-weight: 600; }
+
+.prompt-text {
+  flex: 1 1 auto;
+  min-height: 320px;
+  padding: 10px 12px;
+  font: 12px/1.7 Consolas, "Cascadia Mono", "Courier New", monospace;
+  color: var(--ui-text);
+  background: #fbfcfd;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 6px;
+  outline: none;
+  resize: vertical;
+}
+.prompt-text:focus { border-color: var(--ui-accent); }
+
+.prompt-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* ---------- 危险按钮（删除确认） ---------- */
+
+.btn-danger {
+  border-color: var(--ui-danger);
+  background: var(--ui-danger);
+  color: #ffffff;
+}
+.btn-danger:hover { border-color: #b7281f; background: #b7281f; }
+
+/* 面板在窄屏下额外收一道：标签从左侧挪到上方，
+   否则「现象描述」这种长标签会把输入框挤成一条缝。 */
+@media (max-width: 800px) {
+  .form-row { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .form-label { padding-top: 0; }
+  .prompt-card { padding: 12px; }
+}
+
 /* ============ 窄屏：左右改上下 ============ */
 
 @media (max-width: 800px) {
@@ -793,4 +1234,217 @@ html.is-copy-mode .dragmask { display: none; }
   .device-paper { padding: 16px 14px; }
 
   .filename.is-empty { max-width: 180px; }
+}
+
+/* ==========================================================================
+   P7：空态 / 错误态、页脚与说明、自检结果、首次引导
+   全部以 .p7- 之前没有前缀收在这一节，便于整体审视与摘除。
+   ========================================================================== */
+
+/* ---------- 预览区空态 ---------- */
+
+/* 空文档不给一块白板：白板会被读成「工具坏了」。
+   这一段刻意做得像「一张还没写字的纸」而不是「提示条」——
+   它出现的位置就是正文该出现的位置。 */
+.preview-empty {
+  margin: 28px auto 0;
+  max-width: 300px;
+  padding: 22px 18px;
+  border: 1px dashed var(--ui-border-strong);
+  border-radius: 6px;
+  color: var(--ui-muted);
+  font-size: 12.5px;
+  line-height: 1.9;
+  text-align: center;
+}
+.preview-empty-title {
+  margin: 0 0 6px;
+  color: var(--ui-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* ---------- 预览区错误态 ---------- */
+
+/* 错误必须留在原地。
+   只弹一条 toast 是不够的：toast 三秒后消失，用户一回神只剩一块白板，
+   既不知道发生了什么，也不知道下一步该做什么。 */
+.preview-error {
+  margin: 24px auto 0;
+  max-width: 340px;
+  padding: 16px 18px;
+  border: 1px solid #f0c2c2;
+  border-radius: 6px;
+  background: #fff6f6;
+  color: #7a2a24;
+  font-size: 12.5px;
+  line-height: 1.8;
+}
+.preview-error-title { margin: 0 0 6px; font-weight: 600; color: #c62828; }
+.preview-error-hint { margin: 8px 0 0; color: #8a6a66; }
+
+/* ---------- 页脚 ---------- */
+
+.footer {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+  height: 30px;
+  padding: 0 14px;
+  background: var(--ui-panel);
+  border-top: 1px solid var(--ui-border);
+  font-size: 11.5px;
+  color: var(--ui-muted);
+}
+
+.footer-btn {
+  font: inherit;
+  font-size: 11.5px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ui-muted);
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.footer-btn:hover { color: var(--ui-text); }
+.footer-btn[aria-expanded="true"] { color: var(--ui-accent); font-weight: 600; }
+
+.footer-spacer { flex: 1 1 auto; }
+.footer-ver { flex: 0 0 auto; }
+
+/* 说明面板盖在页脚之上，不占主区高度。
+   放进正常流里展开，会把预览区挤矮一截——那看起来像「打开说明把排版搞坏了」。 */
+.footer-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  z-index: 45;
+  max-height: 62vh;
+  overflow: auto;
+  background: var(--ui-panel);
+  border-top: 1px solid var(--ui-border);
+  box-shadow: 0 -6px 20px rgba(16, 24, 40, .10);
+}
+
+.footer-panel-body {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 16px 18px 20px;
+}
+
+.help-title {
+  margin: 14px 0 6px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ui-text);
+}
+.help-title:first-child { margin-top: 0; }
+
+.help-flow,
+.help-note {
+  margin: 0 0 8px;
+  font-size: 12px;
+  line-height: 1.95;
+  color: var(--ui-text);
+}
+.help-note { color: #4a5058; }
+.help-flow { font-family: Consolas, "Courier New", "Microsoft YaHei", monospace; font-size: 11.5px; }
+
+/* ---------- 自检结果 ---------- */
+
+.selfcheck-summary {
+  font-size: 12.5px;
+  line-height: 1.9;
+  color: var(--ui-text);
+  margin-bottom: 10px;
+}
+
+.selfcheck-row {
+  display: flex;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px dashed #eceef1;
+}
+.selfcheck-row:last-of-type { border-bottom: 0; }
+
+.selfcheck-tag {
+  flex: 0 0 44px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.selfcheck-row.is-ok .selfcheck-tag { color: #1a7f37; }
+.selfcheck-row.is-bad .selfcheck-tag { color: #c62828; }
+
+.selfcheck-title { font-size: 12.5px; color: var(--ui-text); }
+.selfcheck-detail { font-size: 11.5px; line-height: 1.7; color: var(--ui-muted); }
+.selfcheck-row.is-bad .selfcheck-detail { color: #8a5a55; }
+
+.selfcheck-note {
+  margin: 12px 0 0;
+  font-size: 11.5px;
+  line-height: 1.8;
+  color: var(--ui-muted);
+}
+
+/* ---------- 首次使用引导 ---------- */
+
+/* z-index 取 90：高于二维码（60）、确认框（70）、提示词（80），
+   引导是打开页面后第一件要读的东西，不能被任何后续弹层压住。 */
+.onboard-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(15, 20, 28, .45);
+}
+
+.onboard-card {
+  width: 420px;
+  max-width: 100%;
+  padding: 20px 22px 18px;
+  border-radius: 8px;
+  background: var(--ui-panel);
+  box-shadow: 0 14px 44px rgba(16, 24, 40, .30);
+}
+
+.onboard-title { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
+
+.onboard-steps {
+  margin: 0 0 12px;
+  padding-left: 20px;
+  font-size: 12.5px;
+  line-height: 2;
+  color: var(--ui-text);
+}
+.onboard-steps b { color: var(--ui-accent); }
+
+.onboard-note {
+  margin: 0;
+  padding: 9px 11px;
+  border-radius: 5px;
+  background: #f6f7f9;
+  font-size: 11.5px;
+  line-height: 1.85;
+  color: var(--ui-muted);
+}
+
+.onboard-actions { display: flex; justify-content: flex-end; margin-top: 14px; }
+
+/* ---------- P7 的窄屏补丁 ---------- */
+
+@media (max-width: 800px) {
+  /* 页脚在窄屏下改成两端对齐：版本号挪到第二行会白占一行高度，
+     直接让「怎么用 / 自检」留在左边、版本号靠右，一行装得下。 */
+  .footer { gap: 10px; }
+  .footer-panel { max-height: 70vh; }
+  .footer-panel-body { padding: 14px 14px 18px; }
+  .onboard-card { padding: 16px 16px 14px; }
 }

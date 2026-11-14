@@ -26,6 +26,10 @@
 - **多媒体内嵌（P5）**：图片、MathJax 公式、Mermaid 图表全部在本机栅格化成 PNG 的 `data: URI` 再进产物，不依赖网络、不依赖会被剥掉的标签。
 - **手机真机预览**：`serve.cmd` 起一个局域网服务，手机扫码看到「发出去之后读者看到的那一份」，电脑改字手机 800ms 内同步。
 - **兼容规则表**：把「手机上丢样式」沉淀成可复核的规则，核心资产。
+- **页内自检**：页脚「自检」按钮就地跑 A1–A10 十条断言（与 `test/assert.html` 同一套标准），未载入产物时按钮禁用、渲染失败时留下可读的错误说明而不是一页空白。
+- **样式体检**：对固化后的产物逐条核对兼容规则，把问题分成「会丢 / 有风险 / 通过」三档，并指出哪几条属于管线自身的 bug、该回去修代码。
+- **丢失样式登记**：在手机上发现丢样式时，把现象、设备、已排除项记成一条规则，自动生成可直接交给开发 AI 的修复提示词；规则存 `localStorage` 并回灌进渲染管线。
+- **首次使用引导 + 页脚说明**：三步覆盖层带新用户走一遍；页脚「怎么用」常驻「出问题时去哪儿看」的完整流程与踩坑提示。
 
 ## 快速开始
 
@@ -34,7 +38,7 @@
 1. 双击 `index.html`（或拖进浏览器），直接在 `file://` 下运行。
 2. 在左侧写 Markdown，或把 `.md` 文件拖到窗口任意位置，或点右上角「打开 md」。
 3. 右侧预览即是固化后的产物；调好参数后点 **「复制到公众号」**（或 `Ctrl+Enter`），去公众号编辑器 `Ctrl+V`。
-4. 快捷键：`Ctrl+Enter` 复制、`Ctrl+S` 存回本地 `.md`、`Esc` 关闭弹窗。
+4. 快捷键：`Ctrl+Enter` 复制、`Ctrl+S` 存回本地 `.md`、`Ctrl+Shift+P` 打开样式体检、`Esc` 统一关闭顶层弹窗 / 面板。
 
 ### 手机真机预览
 
@@ -59,6 +63,12 @@ parse（markdown-it）
   → 输出
 ```
 
+这条流水线在 P7 补了三层「别把坏东西交给用户」的保护：
+
+- **解析失败不白屏**：markdown-it 抛异常时，产物里会是一块可读的错误说明（含出错位置与原因），而不是空预览。
+- **解析结果缓存**：改主题参数只重跑「固化」这一段，不重复解析 md——长文档拖字号滑块不再卡。
+- **分块固化**：超过约 2000 个节点的超长文档，固化器让出主线程、分批写内联样式，进度条持续有反馈而不是假死。
+
 三个文件各司其职，缺一不可：
 
 | 文件 | 职责 |
@@ -75,6 +85,7 @@ parse（markdown-it）
 index.html              唯一入口（双击即用）
 serve.cmd / serve.py    局域网真机预览服务（/sync 同步通道）
 PLAN.md                 完整设计文档（六条硬约束、阶段划分、关键决策）
+PLAN-II.md              第二期规划：Agent 层（AI 润色 + 版本历史），尚未动手
 vendor/                 离线第三方库（UMD，随仓库走，不引 CDN）
 src/
   theme.css             主题变量 + 应用外壳样式
@@ -87,15 +98,16 @@ src/
   sanitize.js           归一器
   clipboard.js          剪贴板（富文本两层降级）
   sync.js               局域网同步通道
-  view.js               双栏预览 / 大纲 / 二维码
+  view.js               双栏预览 / 大纲 / 二维码 / 空态与错误态
   preview-mode.js       只读预览页与纯净复制页
+  selfcheck.js          页内自检（A1–A10 断言，与 test/assert.html 同标准）
   app.js                引导与事件绑定（最后加载）
   panels/               主题参数 / 样式体检 / 丢失样式登记 三个面板
 fixtures/               12 个回归样本 md
 test/assert.html        浏览器内断言台
 ```
 
-脚本加载顺序固定为 `util → whitelist → compat-rules → vendor/* → pipeline → media → inline-styles → sanitize → clipboard → sync → panels/* → view → preview-mode → app`。`util.js` 必须最先、`app.js` 必须最后。
+脚本加载顺序固定为 `util → whitelist → compat-rules → vendor/* → pipeline → media → inline-styles → sanitize → clipboard → sync → panels/* → view → preview-mode → selfcheck → app`。`util.js` 必须最先、`app.js` 必须最后。
 
 ## 六条硬约束
 
@@ -117,6 +129,8 @@ test/assert.html        浏览器内断言台
 ## 测试
 
 打开 `test/assert.html`，一次多选 `fixtures/` 下的全部 12 个 md 文件。断言按阶段启用：阶段编号大于当前阶段（P5）的断言以灰色显示、不计分。12 个样本覆盖标题、列表、八列表格、超长代码、大图、嵌套引用、提示块、公式、Mermaid、CJK/emoji、链接等回归场景。
+
+同样这十条断言也在产品内以「页脚 → 自检」的形式复刻了一份（`src/selfcheck.js`）。它是刻意与 `assert.html` 重复的：`assert.html` 是验收基准、不许为共用而改动，产品内那份是随手可点的自查，改断言时必须两处一起改。
 
 ## 依赖（vendor）
 

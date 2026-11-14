@@ -334,26 +334,83 @@
   /* ==================== 入口 ==================== */
 
   /**
-   * 固化入口：把 root 挂到 375px 舞台上算样式，写完 style 后摘下来返回。
-   * 挂载 → 采集 → 写入 → 摘除 四步必须成一个整体，中间不能有别的 DOM 操作，
-   * 否则「舞台上的样子」与「被固化的样子」就不再是同一份。
+   * 分块阈值：节点数超过它才分块。
+   * 为什么要有下限：分块本身要付出「多次事件循环往返」的代价，
+   * 一篇普通文章（几百个节点）同步写完只要几毫秒，分块只会让它变慢，
+   * 还平白多出几次进度条刷新。
+   */
+  const CHUNK_THRESHOLD = 2000;
+  /** 每块写多少个元素。取得比较小是为了让长文档在写入期间仍能响应输入。 */
+  const CHUNK_SIZE = 800;
+
+  /**
+   * 分块写入。
+   *
+   * 为什么只分「写」不分「读」：
+   *   采集（gather）是一次性的读操作——它不改 DOM，所以浏览器算一次布局就够了，
+   *   之后每个元素的计算样式都是现成的；而写入会改 style 属性，
+   *   虽然浏览器也会批量延迟重算，但在两趟之间让出主线程，
+   *   至少能保证输入框和滑块在长文档上不被一次长任务憋住。
+   *
+   * 为什么写入可以在舞台外做：writeStyle 只做「合并 style 属性 + 删 class/id」，
+   *   它不读任何计算样式。所以先挂舞台采集、摘下来再写，结果与挂着写完全一致，
+   *   而且避免了「两次渲染同时在舞台上写」这类并发风险。
+   */
+  function writeInChunks(writes, onProgress) {
+    const total = writes.length;
+
+    return new Promise(function (resolve) {
+      let i = 0;
+
+      function step() {
+        const end = Math.min(i + CHUNK_SIZE, total);
+        for (; i < end; i++) writeStyle(writes[i].el, writes[i].decl);
+
+        onProgress({ done: i, total: total, label: '正在固化样式' });
+
+        if (i >= total) { resolve(); return; }
+        MW.util.nextIdle(step);
+      }
+
+      step();
+    });
+  }
+
+  /**
+   * 固化入口：把 root 挂到 375px 舞台上算样式，写完 style 后摘下来返回 Promise<root>。
+   *
+   * 为什么是异步的（P7 起）：
+   *   超过 CHUNK_THRESHOLD 个节点的文档，写入阶段会分块并让出主线程，
+   *   同时通过 options.onProgress 报出百分比——120KB 的文档不再让页面毫无反馈地僵住。
+   *   阈值以下仍然同步写完，所以短文档的行为和 P2 完全一样，没有任何额外延迟。
+   *
+   * options.onProgress(info) 的 info 形如 { done, total, label }，
+   * 与 media.js 的进度回报同形，app.js 那一个进度条可以同时接这两种来源。
    */
   function apply(root, options) {
-    if (!root) return root;
+    const opts = options || {};
+    if (!root) return Promise.resolve(root);
 
     const host = ensureStage();
     host.appendChild(root);
 
+    const writes = [];
     try {
-      const writes = [];
       gather(root, null, writes, true);
-      for (let i = 0; i < writes.length; i++) writeStyle(writes[i].el, writes[i].decl);
     } finally {
       // finally 只做清理，不吞异常：真出错了要让它冒到页面错误块上
       if (root.parentNode === host) host.removeChild(root);
     }
 
-    return root;
+    const total = writes.length;
+
+    // 没有进度回调，或文档不够长：一次写完。短文档上它比任何分块方案都快。
+    if (typeof opts.onProgress !== 'function' || total <= CHUNK_THRESHOLD) {
+      for (let i = 0; i < total; i++) writeStyle(writes[i].el, writes[i].decl);
+      return Promise.resolve(root);
+    }
+
+    return writeInChunks(writes, opts.onProgress).then(function () { return root; });
   }
 
   MW.inlineStyles = {

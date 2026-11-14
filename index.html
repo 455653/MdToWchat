@@ -15,7 +15,7 @@
   <header class="topbar">
     <div class="brand">
       <span class="brand-name">MdWeChat</span>
-      <span class="brand-ver">v0.1.0 · P5</span>
+      <span class="brand-ver">v0.1.0 · P7</span>
     </div>
     <div class="filename is-empty" id="fileName" title="当前文件名">未命名.md</div>
     <div class="topbar-actions">
@@ -173,9 +173,60 @@
       </div>
     </section>
   </main>
+
+  <!--
+    页脚：版本号、自检、怎么用。
+    刻意留在页面底部而不是收进某个菜单：它承担的是「出问题时去哪儿看」的角色，
+    藏起来等于在最需要它的时候多一层寻找成本。
+    两个面板都是绝对定位盖在页脚之上，不占主区高度——
+    展开说明时把预览挤矮，会让人以为「打开说明把排版搞坏了」。
+  -->
+  <footer class="footer" id="footer">
+    <button type="button" class="footer-btn" id="btnHelp" aria-expanded="false">怎么用</button>
+    <button type="button" class="footer-btn" id="btnSelfCheck" aria-expanded="false" disabled>自检</button>
+    <span class="footer-spacer"></span>
+    <span class="footer-ver" id="verText">MdWeChat v0.1.0 · P7</span>
+
+    <section class="footer-panel" id="helpPanel" hidden>
+      <div class="footer-panel-body">
+        <h4 class="help-title">完整流程</h4>
+        <p class="help-flow">
+          ① 写 / 拖入 .md　→　② 浏览器里看预览　→　③ 点「复制到公众号」并 Ctrl+V 粘进图文编辑器<br>
+          ④ 发布后在手机上看真实效果　→　⑤ 掉了的样式回「登记」面板记一条，它会变成下次的兼容规则
+        </p>
+        <p class="help-note">
+          第 ④ 步之前有个前置条件：要在手机上看实时预览，得先在电脑上双击运行 <b>serve.cmd</b>，
+          再点顶栏「手机预览」扫码。手机和电脑必须连同一个 WiFi；关掉 serve.cmd 的窗口，手机上就访问不到了。
+        </p>
+
+        <h4 class="help-title">两个最容易踩的坑</h4>
+        <p class="help-note">
+          粘进公众号之后<b>不要再在公众号里编辑</b>那段文字。它会在你改过的地方再包一层标签，
+          样式会从「一套内联样式」变成「两层嵌套」，后面再想改回来就很麻烦。
+        </p>
+        <p class="help-note">
+          外链链接<b>点不开是正常的</b>。公众号会剥掉 href，所以本工具把链接降级成纯文字，
+          并把完整地址收进文末的「链接」小节，方便读者手抄。这不是 bug。
+        </p>
+
+        <h4 class="help-title">遇到问题</h4>
+        <p class="help-note">
+          手机上看掉了什么样式，去「登记」面板记一条：写清现象，它会生成一段可以交给开发 AI 的修复提示词。
+          复制之前也可以先看「体检」面板，那里列了预计会丢的地方。
+        </p>
+      </div>
+    </section>
+
+    <section class="footer-panel" id="selfcheckPanel" hidden>
+      <div class="footer-panel-body">
+        <div class="selfcheck-summary" id="selfcheckSummary"></div>
+        <div class="selfcheck-list" id="selfcheckList"></div>
+      </div>
+    </section>
+  </footer>
 </div>
 
-<!-- 拖拽遮罩：默认 display:none，靠 .is-on 打开。不用 hidden 属性，因为 CSS 里它是 flex 容器 -->
+<!-- 拖拽遮罩：默认不可见，靠 .is-on 打开（用 opacity + visibility 过渡，见 theme.css）。不用 hidden 属性，因为 CSS 里它始终是 flex 容器 -->
 <div class="dragmask" id="dragMask">松手即可载入 .md 文件</div>
 
 <!--
@@ -238,6 +289,30 @@
   </div>
 </div>
 
+<!--
+  首次使用引导。
+  为什么是覆盖层而不是页面里的一块：「引导挤进布局」意味着第一次打开看到的界面
+  和之后每一次都不一样，用户刚建立的方位感要重建一遍。
+  覆盖层只借用这一次的视线，不动任何一块版面的位置。
+  内容刻意只有三步——五步流程里的 ④⑤ 属于「用起来之后」的说明，放页脚更合适。
+-->
+<div class="onboard-mask" id="onboardMask" hidden>
+  <div class="onboard-card" role="dialog" aria-modal="true" aria-labelledby="onboardTitle">
+    <h3 class="onboard-title" id="onboardTitle">三步就能用</h3>
+    <ol class="onboard-steps">
+      <li><b>拖入</b>　把 .md 文件拖到窗口任意位置，或点右上角「打开 md」。</li>
+      <li><b>复制</b>　点「复制到公众号」，去公众号图文编辑器里按 Ctrl+V。</li>
+      <li><b>核对</b>　发布后在手机上看真实效果；掉了的样式回「登记」面板记一条。</li>
+    </ol>
+    <p class="onboard-note">
+      想在手机上边改边看：先在电脑上双击运行 serve.cmd，再点顶栏「手机预览」扫码。
+    </p>
+    <div class="onboard-actions">
+      <button type="button" class="btn btn-primary" id="btnOnboardOk">知道了</button>
+    </div>
+  </div>
+</div>
+
 <!-- 隐藏的文件选择器。file:// 下不能 fetch，这是唯一合法的本地文件入口 -->
 <input type="file" id="filePicker" accept=".md,.markdown,.txt" hidden>
 <!-- 图片映射入口：把「同名图片」的像素交给 P5 内嵌，替代读不到的外链 src -->
@@ -257,6 +332,10 @@
   media.js 排在 pipeline.js 之后：pipeline 在 build() 里调用 MW.media.prepare / render。
   但 MathJax（约 2MB）与 Mermaid（约 3.2MB）刻意不静态引入——
   media.js 在真正解析到公式/图表时才用动态 script 注入它们，首屏因此不受影响。
+
+  selfcheck.js 只定义一份数据（十条断言），不产生任何副作用、不碰 DOM，
+  所以在 app.js 之前加载即可；它刻意放在最后一批，远离 pipeline，
+  因为「断言」是消费产物的东西，不该出现在生产链路的上游。
 -->
 <script src="src/util.js"></script>
 <script src="src/whitelist.js"></script>
@@ -277,6 +356,7 @@
 <script src="src/panels/report.js"></script>
 <script src="src/view.js"></script>
 <script src="src/preview-mode.js"></script>
+<script src="src/selfcheck.js"></script>
 <script src="src/app.js"></script>
 </body>
 </html>

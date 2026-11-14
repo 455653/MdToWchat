@@ -13,7 +13,12 @@
  *              dropped 是归一阶段整块删除的标签清单，面板据此告诉用户「有内容没了」
  *              media 是 P5 的多媒体统计（内嵌张数、占位图数、体积、告警）
  * options.images      —— { 文件名: dataURI }，用户手动映射进来的本地图片
- * options.onProgress  —— 多媒体内嵌的进度回调，见 src/media.js
+ * options.onProgress  —— 进度回调：多媒体内嵌（src/media.js）与长文档的固化分块
+ *                        （src/inline-styles.js）都用同一个形状 { done, total, label }，
+ *                        app.js 那一条进度条因此可以同时接住这两种来源。
+ * options.reuse       —— true 表示「md 一个字没改，只是主题变了」：复用上一次的
+ *                        解析/降级/多媒体内嵌结果，只重跑固化 + 归一。
+ *                        主题滑块拖动时这才是真正的成本大头，见「解析结果缓存」。
  *   outline —— [{ level, text, nodeId }]，同一份数据也挂在 window.MW.outline
  *
  * 契约（会被 test/assert.html 按阶段检查）：
@@ -682,11 +687,101 @@
     return counts;
   }
 
+  /* ==================== 解析异常的错误块 ==================== */
+
+  /**
+   * 解析/渲染这一步出异常时的错误块。
+   *
+   * 为什么必须画在预览区里、而不是只 toast 一下或者只往控制台打一行：
+   * 解析异常最糟糕的表现形态是「白屏」——用户看不见任何线索，只能猜。
+   * 错误必须长在用户正在看的那块区域里，并且带上「接下来能做什么」。
+   */
+  function buildErrorBlock(title, message, at, hint) {
+    const box = document.createElement('section');
+    box.setAttribute('style', 'background:#fff6f6;border:1px solid #f0c2c2;border-radius:6px;padding:12px 14px;');
+
+    const head = document.createElement('p');
+    head.setAttribute('style', 'font-weight:600;color:#c62828;margin:0 0 8px;');
+    head.textContent = title;
+    box.appendChild(head);
+
+    if (at) {
+      const pos = document.createElement('p');
+      pos.setAttribute('style', 'margin:0 0 6px;');
+      pos.textContent = '出错位置：' + at;
+      box.appendChild(pos);
+    }
+
+    const reason = document.createElement('p');
+    reason.setAttribute('style', 'margin:0 0 8px;');
+    reason.textContent = '原因：' + message;
+    box.appendChild(reason);
+
+    const next = document.createElement('p');
+    next.setAttribute('style', 'color:#6b7280;margin:0;');
+    next.textContent = hint;
+    box.appendChild(next);
+
+    return box;
+  }
+
+  /**
+   * 尽力从异常里取出「出错位置」。
+   * 不编造：取不到就返回空串，错误块里那一行整个不显示。
+   * 编一个假的「第 1 行」比不显示更坏——它会让人去改一个没问题的位置。
+   */
+  function positionOf(err) {
+    if (!err) return '';
+    const parts = [];
+    if (err.line != null) parts.push('第 ' + err.line + ' 行');
+    if (err.column != null) parts.push('第 ' + err.column + ' 列');
+    if (err.index != null) parts.push('第 ' + (Number(err.index) + 1) + ' 个字符');
+    return parts.join('，');
+  }
+
+  const PARSE_HINT = '可以先把出错位置附近那一段删掉再试；'
+    + '如果整份文档都打不开，请用别的编辑器「另存为 UTF-8」后重新载入。';
+
+  /* ==================== 解析结果缓存 ==================== */
+
+  /**
+   * 主题变更时只重跑固化，不重跑解析。
+   *
+   * 为什么值得缓存：解析 + 降级 + 多媒体内嵌（尤其图片转 data: URI）
+   * 是整条管线里最贵的一段，而它与主题完全无关——主题只影响
+   * 「元素算出来的样式」，也就是固化那一步读的东西。
+   * 用户拖一次字号滑块就要把几百 KB 的 md 重新解析一遍，是纯浪费。
+   *
+   * 缓存什么、不缓存什么：
+   *   存 holder 的 innerHTML（此时已经过全部降级与多媒体内嵌）
+   *   —— 从它开始正好接上「搬进 root → 固化 → 归一」。
+   *   不存 DOM 节点：第一次构建结束时 holder 的子节点已经被搬走了，
+   *   留着那个空壳没有意义，而 innerHTML 可以在复用时重新解析出一份新的。
+   *
+   * 为什么用 md 原文做键：主题变化时原文一字未改，这是最直接也最可靠的判等。
+   *   app.js 传来的 reuse 只是一个「值得一试」的意图，真正决定能不能复用的是这里。
+   */
+  const cache = { text: null, holderHtml: '', outline: [], meta: null };
+
+  function takeCache(text) {
+    if (cache.meta && cache.text === text) return cache;
+    return null;
+  }
+
+  function putCache(text, holderHtml, outline, meta) {
+    cache.text = text;
+    cache.holderHtml = holderHtml;
+    cache.outline = outline;
+    // 存一份浅拷贝：meta.dropped 每次归一都会重新算，直接存引用会被下一次构建改写
+    cache.meta = Object.assign({}, meta);
+  }
+
   /* ==================== 主流程 ==================== */
 
   /**
    * 主流程。P5 起是异步的：产物里要内嵌图片、公式与图表，
    * 而公式与图表的引擎是懒加载的，必须等它们回来、栅格化完成才能固化。
+   * P7 起固化本身也可能是异步的（长文档分块写入），所以这里也要 await 它。
    */
   async function build(mdText, options) {
     const opts = Object.assign({ encoding: 'UTF-8', bytes: null }, options || {});
@@ -712,6 +807,36 @@
     // 会让 Console 里的 window.MW.outline 和眼前的预览对不上。
     MW.outline = [];
 
+    /*
+     * 复用分支：md 没变、只是主题变了，跳过解析与内嵌，直接重跑固化。
+     * 位置刻意放在 vendor 检查之前——缺库时根本走不到这里（缓存是空的）。
+     */
+    const hit = opts.reuse ? takeCache(text) : null;
+    if (hit) {
+      const holder = document.createElement('div');
+      holder.innerHTML = hit.holderHtml;
+
+      const outline = hit.outline.slice();
+      MW.outline = outline;
+
+      while (holder.firstChild) root.appendChild(holder.firstChild);
+
+      // 复用路径里唯一真正要做的事：按新主题重新算一遍样式
+      await MW.inlineStyles.apply(root, { onProgress: opts.onProgress });
+
+      const reused = MW.sanitize.run(root, opts);
+      root.appendChild(reused.root);
+
+      meta.headings = hit.meta.headings;
+      meta.media = hit.meta.media;
+      meta.dropped = reused.dropped;
+      // 打上这个标记，app.js 才不会把同一批多媒体告警再播一遍。
+      // 拖一次主题滑块会触发十几次复用渲染，每次都重播等于整屏都是告警。
+      meta.reused = true;
+
+      return { root: root, html: root.innerHTML, meta: meta, outline: outline };
+    }
+
     const missing = missingVendor();
     if (missing.length) {
       root.appendChild(buildVendorError(missing));
@@ -719,15 +844,25 @@
       return { root: root, html: root.innerHTML, meta: meta, outline: [] };
     }
 
-    const activeParser = getParser();
-    const env = {};
-    const tokens = activeParser.parse(text, env);
-    meta.headings = countHeadingsByLevel(tokens);
+    let html = '';
+    try {
+      const activeParser = getParser();
+      const env = {};
+      const tokens = activeParser.parse(text, env);
+      meta.headings = countHeadingsByLevel(tokens);
 
-    // 用同一份 token 流去渲染，而不是再调一次 render：
-    // render 内部会重新 parse，脚注插件把状态记在 env 上，
-    // 解析两遍等于让插件在同一个 env 上跑两轮，是白做功也是隐患。
-    const html = activeParser.renderer.render(tokens, activeParser.options, env);
+      // 用同一份 token 流去渲染，而不是再调一次 render：
+      // render 内部会重新 parse，脚注插件把状态记在 env 上，
+      // 解析两遍等于让插件在同一个 env 上跑两轮，是白做功也是隐患。
+      html = activeParser.renderer.render(tokens, activeParser.options, env);
+    } catch (err) {
+      // 解析异常要变成「看得见的错误块」，不是抛出去让别人白屏。
+      // 这里不算吞异常：错误原因、位置（能取到时）与下一步该做什么都在页面上。
+      const message = err && err.message ? err.message : String(err);
+      root.appendChild(buildErrorBlock('这段 Markdown 没能解析', message, positionOf(err), PARSE_HINT));
+      meta.error = message;
+      return { root: root, html: root.innerHTML, meta: meta, outline: [] };
+    }
 
     const holder = document.createElement('div');
     // 这里用 innerHTML 是安全的，两条理由缺一不可：
@@ -781,6 +916,13 @@
     }
 
     /*
+     * 缓存就落在这里：此刻 holder 已经过全部降级与多媒体内嵌，
+     * 正是「主题变了要重跑的那一段」的起点。再往后（搬进 root、固化、归一）
+     * 全都是主题相关的，不能缓存。
+     */
+    putCache(text, holder.innerHTML, outline, meta);
+
+    /*
      * 内容先搬进带 data-mw-root 的 root 再固化。
      * 这一步不是「顺手整理 DOM」：固化要求被固化的节点正好挂在
      * `.article [data-mw-root]` 这套地基规则下，否则算出来的是浏览器默认样式
@@ -788,8 +930,8 @@
      */
     while (holder.firstChild) root.appendChild(holder.firstChild);
 
-    // 固化：把浏览器算出来的样式写死进每个元素的 style
-    MW.inlineStyles.apply(root);
+    // 固化：把浏览器算出来的样式写死进每个元素的 style（长文档会分块，见 inline-styles.js）
+    await MW.inlineStyles.apply(root, { onProgress: opts.onProgress });
 
     // 归一：白名单清洗，并在最外层补一个带主题地基的 section
     const clean = MW.sanitize.run(root, opts);

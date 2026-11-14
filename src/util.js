@@ -31,6 +31,24 @@
   }
 
   /**
+   * 让出主线程，等浏览器「有空」时再继续做下一块。
+   *
+   * 为什么优先 requestIdleCallback：分块渲染的语义就是「浏览器闲着才做一点」，
+   * rIC 正好表达它，也不会在用户正在输入、正在拖动时抢占主线程。
+   * 为什么必须带 timeout：页面持续忙碌时 rIC 可能迟迟不回调，进度条会停住不动，
+   * 看起来像卡死；给了上限之后最坏也只是退化成「每 120ms 做一块」。
+   * 为什么兜底用 setTimeout 而不是 rAF：Safari 至今没有 rIC，而 rAF 在没有绘制的
+   * 标签页里会被暂停——后台标签页里渲染会彻底停住；setTimeout 不会。
+   */
+  function nextIdle(fn) {
+    if (typeof global.requestIdleCallback === 'function') {
+      global.requestIdleCallback(function () { fn(); }, { timeout: 120 });
+      return;
+    }
+    global.setTimeout(fn, 0);
+  }
+
+  /**
    * HTML 转义。P0 的管线走 textContent，用不到它；
    * 但 P1 之后要拼 HTML 字符串（高亮、行号等），届时必须用它，
    * 先放在这里，避免以后有人图省事直接拼 template string。
@@ -221,6 +239,7 @@
   }
 
   util.debounce = debounce;
+  util.nextIdle = nextIdle;
   util.escapeHtml = escapeHtml;
   util.countChars = countChars;
   util.utf8Bytes = utf8Bytes;

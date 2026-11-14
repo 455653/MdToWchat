@@ -1,11 +1,13 @@
 /*
  * view.js —— 预览视图
  *
- * P3 只加「看」的能力，所以这一层不碰解析、不碰固化，只做四件事：
+ * P3 只加「看」的能力，所以这一层不碰解析、不碰固化，只做五件事：
  *   1. 双栏对照：左栏桌面宽 1080px、右栏手机宽，两栏挂的是同一份产物；
  *   2. 设备档位：375 / 393 / 360 三档，只改右栏容器宽度，不重跑管线；
  *   3. 大纲侧栏：从 window.MW.outline 生成，点击按 data-mw-id 跳转，可视区高亮；
- *   4. 深色背景开关与二维码遮罩。
+ *   4. 深色背景开关与二维码遮罩；
+ *   5. P7 加的空态与错误态：没内容时给人话引导，渲染失败时把原因留在原地。
+ *      这两块都只画在预览容器里，不属于产物，所以「复制出去的」永远是干净的那一份。
  *
  * 「同一份产物」是这一层唯一不能妥协的地方：
  *   两栏各渲染一次看起来也能跑，但那意味着管线跑两遍，两边一旦有任何
@@ -59,6 +61,81 @@
 
   /* ==================== 双栏挂载 ==================== */
 
+  /** 空态文案。刻意写成「下一步做什么」，而不是「暂无数据」——后者等于什么都没说。 */
+  const EMPTY_TITLE = '把 Markdown 拖进来就能看到排版';
+  const EMPTY_BODY = '把 .md 文件拖到窗口任意位置，或点右上角「打开 md」；'
+    + '也可以直接在左侧输入框里写，右边的预览会跟着变。';
+
+  /**
+   * 把一个节点挂进栏里，顺手清掉上一次留下的东西（空态块 / 错误块 / 旧产物）。
+   *
+   * 为什么不用「先 textContent='' 再 appendChild」：
+   *   那样容器会经历一次「没有子节点」的状态，旧子树被整棵拆掉、新子树再整棵建起来。
+   *   原地替换只让「被换掉的那一个子树」失效，容器自身不参与重建。
+   *   拖主题滑块这类重复渲染里，这个差别会被放大成肉眼可见的卡顿。
+   */
+  function mountProduct(box, node) {
+    const stale = Array.prototype.slice.call(box.children);
+    if (stale.length === 1 && stale[0] !== node) {
+      box.replaceChild(node, stale[0]);
+      return;
+    }
+    for (let i = 0; i < stale.length; i++) {
+      if (stale[i] !== node) box.removeChild(stale[i]);
+    }
+    if (node.parentNode !== box) box.appendChild(node);
+  }
+
+  /** 空态块。只挂在预览容器里，不是产物，所以不会被复制走。 */
+  function emptyBlock() {
+    const box = document.createElement('div');
+    box.className = 'preview-empty';
+
+    const title = document.createElement('p');
+    title.className = 'preview-empty-title';
+    title.textContent = EMPTY_TITLE;
+    box.appendChild(title);
+
+    const body = document.createElement('p');
+    body.textContent = EMPTY_BODY;
+    box.appendChild(body);
+
+    return box;
+  }
+
+  /**
+   * 渲染彻底失败时的错误块。
+   * 留在原地而不是只弹一条 toast：toast 四秒后消失，用户回头看预览时
+   * 既看不到内容也看不到原因，还分不清「空白」是「没内容」还是「出错了」。
+   */
+  function errorBlock(data) {
+    const box = document.createElement('div');
+    box.className = 'preview-error';
+
+    const title = document.createElement('p');
+    title.className = 'preview-error-title';
+    title.textContent = data.title || '渲染失败';
+    box.appendChild(title);
+
+    if (data.at) {
+      const pos = document.createElement('p');
+      pos.textContent = '出错位置：' + data.at;
+      box.appendChild(pos);
+    }
+
+    const reason = document.createElement('p');
+    reason.textContent = '原因：' + (data.message || '未知错误');
+    box.appendChild(reason);
+
+    const hint = document.createElement('p');
+    hint.className = 'preview-error-hint';
+    hint.textContent = data.hint
+      || '改完左侧内容后按 Ctrl+Enter 会重新渲染；如果一直失败，刷新页面再试一次。';
+    box.appendChild(hint);
+
+    return box;
+  }
+
   /**
    * 把一份产物挂到两栏上，并刷新大纲与缩放。
    * 两栏共用同一份 root：先挂左栏，再克隆给右栏。
@@ -69,13 +146,29 @@
     const root = out && out.root;
     if (!root) return;
 
-    el.desktopArticle.textContent = '';
-    el.phoneArticle.textContent = '';
-    el.desktopArticle.appendChild(root);
-    el.phoneArticle.appendChild(root.cloneNode(true));
+    const meta = out.meta || {};
+    // 空态只在「真的没内容」时出现。有错误时不算空态——那种情况下产物里
+    // 已经躺着一块错误说明，再叠一层空态引导会让用户以为是自己没拖文件。
+    const blank = meta.empty && !meta.error;
+
+    if (blank) {
+      mountProduct(el.desktopArticle, emptyBlock());
+      mountProduct(el.phoneArticle, emptyBlock());
+    } else {
+      mountProduct(el.desktopArticle, root);
+      mountProduct(el.phoneArticle, root.cloneNode(true));
+    }
 
     fitDesktop();
-    renderOutline(out.outline || []);
+    renderOutline(blank ? [] : (out.outline || []));
+    observeHeadings();
+  }
+
+  /** 渲染失败时把错误画进两栏。app.js 在 build 抛异常时调它。 */
+  function paintError(info) {
+    mountProduct(el.desktopArticle, errorBlock(info || {}));
+    mountProduct(el.phoneArticle, errorBlock(info || {}));
+    renderOutline([]);
     observeHeadings();
   }
 
@@ -512,7 +605,11 @@
     DEVICES: DEVICES,
     init: init,
     paint: paint,
+    /** 渲染管线整体失败时由 app.js 调用：把原因画在预览框里，而不是留一页空白。 */
+    paintError: paintError,
     refresh: refresh,
-    resetScroll: resetScroll
+    resetScroll: resetScroll,
+    /** 供 app.js 统一处理 Esc 时复用；closeQr 幂等，重复调用只多做一次无副作用的赋值。 */
+    closeQr: closeQr
   };
 })(window);

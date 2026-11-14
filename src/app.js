@@ -5,12 +5,16 @@
  * 它是唯一有副作用的文件（读 localStorage、挂事件、跑第一次渲染），
  * 前面所有模块都要先完成「向 window.MW 注册自己」这一步，它才能找到它们。
  *
- * 本文件负责四件事，不负责第五件：
+ * 本文件负责六件事，不负责渲染逻辑本身——那在 pipeline 里；
+ * 也不负责剪贴板机制本身——那在 clipboard 里：
  *   1. 恢复上次的文档 / 文件名 / 主题；
  *   2. 绑定输入通路（textarea、文件选择、拖拽、粘贴）与 tab 切换；
- *   3. 把 pipeline 的产物挂到文章容器上；
- *   4. 复制的编排：体检 → 知情确认 → 写剪贴板 → 如实反馈（+ 复制源码、纯净页、Ctrl+S 存盘）。
- *   不负责渲染逻辑本身——那在 pipeline 里；也不负责剪贴板机制本身——那在 clipboard 里。
+ *   3. 把 pipeline 的产物挂到文章容器上（空态、错误态的落位也在这里）；
+ *   4. 复制的编排：体检 → 知情确认 → 写剪贴板 → 如实反馈（+ 复制源码、纯净页、Ctrl+S 存盘）；
+ *   5. 快捷键，以及「关掉最上面那一层弹层」的唯一入口——
+ *      弹层分散在三个模块里（确认框在本文件、二维码在 view、提示词在 report 面板），
+ *      键盘事件却只有一条；集中在一处，才不会出现「改了快捷键、漏掉某个弹层」；
+ *   6. 一次性外壳：首次引导、页脚那两个折叠面板（怎么用 / 自检）。
  *
  * 为什么复制要有「体检」这一步：
  *   「已复制」这个反馈本身不携带任何信息。用户需要知道的是
@@ -33,6 +37,19 @@
   const SAVE_DEBOUNCE = 500;   // 需求规定：输入停止 500ms 才落盘
   const RENDER_DEBOUNCE = 180; // 预览比落盘可以更灵敏，但不必每个按键都重建 DOM
 
+  /**
+   * 长文档用更长的输入防抖。
+   * 50KB 是「几百段文字 + 几张图」的量级；到这一步，一次重渲染的代价已经明显大过
+   * 「多看 0.5 秒旧画面」，而那 0.5 秒换来的是一次真正不卡手的输入。
+   * 阈值按 UTF-8 字节算而不是按字符数：一个汉字三字节，按字符数算会把一份
+   * 50KB 的中文文档当成 17KB，分档等于没分。
+   */
+  const LONG_DOC_BYTES = 50 * 1024;
+  const RENDER_DEBOUNCE_SLOW = 800;
+
+  /** 首次引导「知道了」的标记。它只影响下一次打开是否再弹，丢了也无所谓。 */
+  const KEY_ONBOARD = 'mw.onboard';
+
   const state = {
     name: DEFAULT_NAME,
     hasFile: false,
@@ -54,7 +71,25 @@
   const localImageMap = Object.create(null);
 
   const saveDebounced = util.debounce(function () { saveNow(); }, SAVE_DEBOUNCE);
-  const renderDebounced = util.debounce(function () { renderPreview(); }, RENDER_DEBOUNCE);
+
+  /*
+   * 两个渲染防抖实例，而不是一个「到点再挑档位」的实例：
+   * util.debounce 的 wait 在创建那一刻就定死了，想在同一个实例里换档就得自己
+   * 重造一份定时器逻辑，反而把「什么时候该慢下来」这件事藏进定时器里。
+   * 拆成两个之后，档位判断集中在 renderSoon 一处，读起来就是一句人话。
+   */
+  const renderDebouncedFast = util.debounce(function (options) { renderPreview(options); }, RENDER_DEBOUNCE);
+  const renderDebouncedSlow = util.debounce(function (options) { renderPreview(options); }, RENDER_DEBOUNCE_SLOW);
+
+  /**
+   * 输入通路统一走这里。
+   * 为什么不一律用 800ms：短文里那 0.8 秒会被读成「打字没反应」。
+   * 为什么不一律用 180ms：长文里每停 180ms 就重建一次几百 KB 的 DOM，输入会一顿一顿。
+   */
+  function renderSoon(options) {
+    const slow = util.utf8Bytes(el.input.value) > LONG_DOC_BYTES;
+    (slow ? renderDebouncedSlow : renderDebouncedFast)(options);
+  }
 
   function $(id) { return document.getElementById(id); }
 
@@ -151,11 +186,16 @@
    * 最终挂上去的是过时产物（「我改了两个字，预览反而退回去了」）。
    *
    * 返回值是 Promise<产物 | null>。null 只有一种情况：这次渲染失败，
-   * 原因已经用它自己的 toast 说过了，调用方只需「什么都不做」。
+   * 原因已经写进预览区的错误块、也弹过 toast 了，调用方只需「什么都不做」。
+   *
+   * options.reuse —— 表达「md 一字未改，只是主题变了」这个意图。
+   *   这里只负责把意图传下去，能不能真复用由 pipeline 拿 md 原文对账决定：
+   *   主题滑块一拖就是几十个事件，每个都从零解析一遍几百 KB 的 md 是纯浪费。
    */
   let renderToken = 0;
 
-  function renderPreview() {
+  function renderPreview(options) {
+    const opts = options || {};
     const myToken = ++renderToken;
     const text = el.input.value;
 
@@ -164,6 +204,7 @@
     return MW.pipeline.build(text, {
       encoding: state.encoding,
       images: localImageMap,
+      reuse: !!opts.reuse,
       onProgress: function (info) {
         if (myToken !== renderToken) return; // 已经不是最新一次了，回调别再动 DOM
         showRenderProgress(info.done, info.total, info.label);
@@ -177,17 +218,43 @@
       el.stats.textContent = out.meta.chars + ' 字符 · ' + out.meta.lines + ' 行 · '
         + util.formatBytes(out.meta.bytes);
 
-      // 多媒体告警接在统计后面：用户需要知道「有图占位了」「全文超 4MB」
-      if (out.meta.media && out.meta.media.warnings && out.meta.media.warnings.length) {
+      // 自检按钮只对「手上有一份正常产物」的时候开放。
+      // 空文档或解析失败时它跑出来必然是一片红，那不是自检结果，是自检的噪音；
+      // 这两种状态直接禁用——禁用比「点了没反应」和「点出一片红」都更诚实。
+      el.btnSelfCheck.disabled = !!(out.meta.empty || out.meta.error);
+
+      // 多媒体告警接在统计后面：用户需要知道「有图占位了」「全文超 4MB」。
+      // 复用渲染（主题变化）不重复播报：同一份告警在拖一次字号滑块的过程中
+      // 会被弹十几次，最后整屏都是它。
+      if (!out.meta.reused
+        && out.meta.media && out.meta.media.warnings && out.meta.media.warnings.length) {
         out.meta.media.warnings.forEach(function (w) { util.toast(w, 'warn'); });
       }
 
       lastResult = out;
+      // 通知面板「产物换了」。体检面板据此重跑一遍判定，登记面板据此刷新
+      // 「问题位置」下拉（新文档的标题变了）。
+      // 用事件而不是让面板自己去轮询：只有这里知道「什么时候有了一份新产物」，
+      // 轮询只会把这件事变成定时器猜谜。放在单飞锁判断之后，过时产物不会发通知。
+      document.dispatchEvent(new CustomEvent('mw:result'));
       return out;
     }).catch(function (err) {
       if (myToken !== renderToken) return null;
       hideRenderProgress();
-      util.toast('渲染失败：' + (err && err.message ? err.message : err), 'error');
+      const message = err && err.message ? err.message : String(err);
+
+      // 两处都要说，缺一不可：
+      //   toast 负责「此刻告诉我」；预览区的错误块负责「我回头看时原因还在」。
+      // 只 toast 的话，四秒后它就消失了，用户再往预览区一看只剩一页空白，
+      // 分不清那是「没内容」还是「出错」——这正是最难自查的失败形态。
+      MW.view.paintError({
+        title: '渲染没能完成',
+        message: message,
+        hint: '改一下左侧内容就会自动重试；如果一直失败，刷新页面再试一次。'
+      });
+      el.btnSelfCheck.disabled = true;
+
+      util.toast('渲染失败：' + message, 'error', '预览区已经写明原因。改完左侧内容会自动重试。');
       // 返回 null，不把错误继续抛出去：错误已经用 toast 让用户看见了，
       // 再抛出去只会在 applyText、beforeunload 这些没人接 then 的调用点
       // 变成一条 unhandled rejection，对用户而言是「多报了一次没用的错」。
@@ -239,8 +306,9 @@
       if (res.encoding === 'GBK') util.toast('已按 GBK 解码：' + res.name);
       if (res.lossy) util.toast('编码可能不是 UTF-8，建议另存为 UTF-8 后重新载入', 'warn');
     }).catch(function (err) {
-      // 读文件失败必须让用户看见，不能只是「什么都没发生」
-      util.toast(err.message, 'error');
+      // 读文件失败必须让用户看见，不能只是「什么都没发生」。
+      // 后半句是「接下来能做什么」：只说失败，用户下一步只能靠猜。
+      util.toast(err.message, 'error', '可以换一个文件再试，或把内容直接粘进左侧输入框。');
     });
   }
 
@@ -297,12 +365,12 @@
           localImageMap[file.name.toLowerCase()] = uri;
           okCount++;
         }).catch(function (err) {
-          util.toast(err.message, 'error');
+          util.toast(err.message, 'error', '这一张会继续显示占位图，其余图片不受影响。');
         });
       })).then(function () {
         if (!okCount) return;
         util.toast('已映射 ' + okCount + ' 张本地图片', 'ok', '同名的外链图片会改用它们，正在重新渲染。');
-        renderDebounced();
+        renderSoon();
       });
     });
   }
@@ -365,7 +433,7 @@
     el.input.addEventListener('input', function () {
       // 手敲文字时不再算「已选文件」，但保留当前文件名显示，
       // 避免用户改两个字就看不到自己在编辑哪个文件。
-      renderDebounced();
+      renderSoon();
       saveDebounced();
     });
 
@@ -374,13 +442,19 @@
   }
 
   /**
-   * 主题变更 → 重跑管线。
+   * 主题变更 → 重跑管线，但只重跑「与主题有关的那一段」。
    * 产物在 P2 起是把样式固化死在元素上的，改 CSS 变量不会自动回头改内联样式，
    * 不重跑就会出现「参数条显示 18px、预览还是 16px」。
-   * 走防抖：拖滑块时 input 事件非常密集，每个事件都重建一次 DOM 会明显卡手。
+   *
+   * 为什么传 reuse:true：解析 + 降级 + 多媒体内嵌（尤其图片转 data: URI）是
+   * 整条管线里最贵的一段，而它们与主题完全无关——主题只影响「元素算出来的样式」，
+   * 也就是固化那一步读的东西。拖一次滑块就把几百 KB 的 md 重新解析一遍是纯浪费。
+   * 这只是意图，pipeline 会拿 md 原文对账，对不上就老老实实走完整流程。
+   *
+   * 仍走防抖：拖滑块时 input 事件非常密集，每个事件都跑一次固化会明显卡手。
    */
   function bindTheme() {
-    document.addEventListener('mw:theme', function () { renderDebounced(); });
+    document.addEventListener('mw:theme', function () { renderSoon({ reuse: true }); });
   }
 
   function bindTabs() {
@@ -635,16 +709,24 @@
    * 快捷键。
    * 挂在 document 上而不是 textarea 上：Ctrl+Enter 多半是在刚写完正文时按的，
    * 那一刻焦点正在 textarea 里，挂 document 这条要求才成立。
-   * 只对这两个组合键 preventDefault，别的按键一个都不碰——
+   * 只对自己真正处理的组合键 preventDefault，别的按键一个都不碰——
    * 一旦顺手拦了别的键，输入法、Tab、方向键都会在这里坏掉。
+   *
+   * Esc 排在所有分支之前：它是「先逃出来」的键，该关掉眼前压着的那一层，
+   * 而不是先判断「现在焦点在哪、有没有按 Ctrl」。
    */
   function bindShortcuts() {
     document.addEventListener('keydown', function (event) {
-      // 确认框开着时只认 Esc：否则连按两次 Ctrl+Enter 会在框上再叠一层同样的问题说明
-      if (!el.confirmMask.hidden) {
-        if (event.key === 'Escape') closeConfirm();
+      if (event.key === 'Escape') {
+        // 关得掉才 preventDefault：页面上什么都没开着的时候，Esc 该留给浏览器
+        // （例如退出全屏），不该被这里无声吃掉。
+        if (closeTopLayer()) event.preventDefault();
         return;
       }
+
+      // 确认框开着时只认 Esc（上面已处理）：否则连按两次 Ctrl+Enter
+      // 会在框上再叠一层同样的问题说明。
+      if (!el.confirmMask.hidden) return;
 
       if (!(event.ctrlKey || event.metaKey)) return;
       if (event.isComposing) return; // 输入法组合中，Ctrl 组合交给输入法自己处理
@@ -656,12 +738,181 @@
         copyForWechat();
         return;
       }
+      // Ctrl/Cmd+Shift+P 打开纯净页。
+      // 为什么不占 Ctrl+P：那是打印，弹一次打印对话框用户就再也不会用这个快捷键了；
+      // Ctrl+Shift+P 在网页里没有浏览器的默认行为（它只在 DevTools 聚焦时是命令面板）。
+      if (key === 'p' && event.shiftKey && !event.altKey) {
+        event.preventDefault();
+        openCopyPage();
+        return;
+      }
       // Ctrl+Shift+S 是浏览器自己的「另存为」，不抢
       if (key === 's' && !event.shiftKey && !event.altKey) {
         event.preventDefault();
         saveToFile();
       }
     });
+  }
+
+  /* ==================== 弹层与页脚面板 ==================== */
+
+  /**
+   * 关掉「压在最上面的那一层」，关掉就返回 true。
+   *
+   * 为什么按「盖得越高越先关」的顺序来，而不是一次全关：
+   * Esc 的语义是「退出眼前这一层」。一次全关会让用户按第一下就把确认框里的选择
+   * 一起清掉——他明明只是想退出后面那层。
+   *
+   * 为什么集中在 app.js：这几层分散在三个模块里（确认框在本文件、二维码在 view、
+   * 提示词在 report 面板），键盘事件却只有一条。分散写的话，以后加一层弹层，
+   * Esc 就会悄悄漏掉它，而且没人会发现。
+   */
+  function closeTopLayer() {
+    if (!el.onboardMask.hidden) { closeOnboard(); return true; }
+    if (!el.confirmMask.hidden) { closeConfirm(); return true; }
+    // 提示词弹层由面板自己创建/销毁，所以这里得先问它有没有，再让它关。
+    if (MW.panels.report.hasPrompt()) { MW.panels.report.closePrompt(); return true; }
+    if (!el.qrMask.hidden) { MW.view.closeQr(); return true; }
+    if (!el.selfcheckPanel.hidden) { togglePanel('selfcheck', false); return true; }
+    if (!el.helpPanel.hidden) { togglePanel('help', false); return true; }
+    return false;
+  }
+
+  /* ==================== 首次使用引导 ==================== */
+
+  function onboardSeen() {
+    try {
+      return localStorage.getItem(KEY_ONBOARD) === '1';
+    } catch (err) {
+      // 读不到就当「看过」。存储不可用（Safari 的 file://）时如果每次都弹，
+      // 用户会撞上一个关不掉的引导——那比「少看一次引导」糟得多。
+      return true;
+    }
+  }
+
+  /**
+   * 收起引导并记下标记。
+   * Esc 和「知道了」走同一个出口：它们表达的是同一件事（我读过了）。
+   * 若只把遮罩藏起来而不写标记，下次打开又会弹，用户会觉得这个键没生效。
+   */
+  function closeOnboard() {
+    el.onboardMask.hidden = true;
+    writeKey(KEY_ONBOARD, '1');
+  }
+
+  function maybeOnboard() {
+    if (onboardSeen()) return;
+    el.onboardMask.hidden = false;
+  }
+
+  /* ==================== 页脚：怎么用 / 自检 ==================== */
+
+  /**
+   * 页脚两个面板的展开/收起，并让它们互斥。
+   * 为什么互斥：两者都是绝对定位、盖在页脚上方同一块区域；
+   * 同时展开时后者会压住前者，看起来像「点了一个开了另一个」。
+   */
+  function togglePanel(name, force) {
+    const isHelp = name === 'help';
+    const panel = isHelp ? el.helpPanel : el.selfcheckPanel;
+    const btn = isHelp ? el.btnHelp : el.btnSelfCheck;
+    const next = force == null ? panel.hidden : !!force;
+
+    panel.hidden = !next;
+    // aria-expanded 跟着按钮一起变：它是按钮自己状态的唯一声明处，
+    // 不跟着变的话，读屏软件会一直说「已展开」。
+    btn.setAttribute('aria-expanded', String(next));
+
+    if (next) {
+      const other = isHelp ? el.selfcheckPanel : el.helpPanel;
+      const otherBtn = isHelp ? el.btnSelfCheck : el.btnHelp;
+      other.hidden = true;
+      otherBtn.setAttribute('aria-expanded', 'false');
+    }
+  }
+
+  /**
+   * 跑一遍自检并把结果铺开。
+   * 数据来自 MW.selfcheck（与 test/assert.html 同源的一份断言副本），
+   * 判断逻辑在那边，这里只负责「画出来」——面板里不该有第二套判定标准。
+   */
+  function renderSelfcheck() {
+    const report = MW.selfcheck.run(lastResult);
+
+    el.selfcheckSummary.textContent = '';
+    el.selfcheckList.textContent = '';
+
+    if (report.error) {
+      const line = document.createElement('div');
+      line.className = 'selfcheck-row is-bad';
+      const tag = document.createElement('span');
+      tag.className = 'selfcheck-tag';
+      tag.textContent = '未进行';
+      line.appendChild(tag);
+      const body = document.createElement('div');
+      const text = document.createElement('div');
+      text.className = 'selfcheck-detail';
+      text.textContent = report.error;
+      body.appendChild(text);
+      line.appendChild(body);
+      el.selfcheckSummary.appendChild(line);
+      return;
+    }
+
+    const sum = document.createElement('div');
+    sum.className = 'selfcheck-row ' + (report.allOk ? 'is-ok' : 'is-bad');
+    const sumTag = document.createElement('span');
+    sumTag.className = 'selfcheck-tag';
+    sumTag.textContent = report.allOk ? '通过' : '未通过';
+    sum.appendChild(sumTag);
+    const sumBody = document.createElement('div');
+    const sumTitle = document.createElement('div');
+    sumTitle.className = 'selfcheck-title';
+    sumTitle.textContent = '断言结果：' + report.passed + ' / ' + report.total;
+    sumBody.appendChild(sumTitle);
+    sum.appendChild(sumBody);
+    el.selfcheckSummary.appendChild(sum);
+
+    report.results.forEach(function (r) {
+      const row = document.createElement('div');
+      row.className = 'selfcheck-row ' + (r.ok ? 'is-ok' : 'is-bad');
+
+      const tag = document.createElement('span');
+      tag.className = 'selfcheck-tag';
+      tag.textContent = r.ok ? '通过' : '未通过';
+      row.appendChild(tag);
+
+      const body = document.createElement('div');
+      const title = document.createElement('div');
+      title.className = 'selfcheck-title';
+      title.textContent = r.id + '　' + r.title;
+      body.appendChild(title);
+
+      // 通过时不用再复述失败的细节，展示断言本身在查什么更有用；
+      // 未通过时才把 detail（实测到了什么）顶上来，那才是要读的那一行。
+      const detail = document.createElement('div');
+      detail.className = 'selfcheck-detail';
+      detail.textContent = r.ok ? r.desc : (r.detail || r.desc);
+      body.appendChild(detail);
+
+      row.appendChild(body);
+      el.selfcheckList.appendChild(row);
+    });
+  }
+
+  function bindFooter() {
+    el.btnHelp.addEventListener('click', function () {
+      togglePanel('help', el.helpPanel.hidden);
+    });
+
+    el.btnSelfCheck.addEventListener('click', function () {
+      const opening = el.selfcheckPanel.hidden;
+      togglePanel('selfcheck', opening);
+      // 只在展开时才跑断言：收起动作不该顺带做一次几十毫秒的扫描。
+      if (opening) renderSelfcheck();
+    });
+
+    el.btnOnboardOk.addEventListener('click', closeOnboard);
   }
 
   /* ==================== 引导 ==================== */
@@ -689,6 +940,17 @@
     el.confirmBody = $('confirmBody');
     el.btnConfirmOk = $('btnConfirmOk');
     el.btnConfirmCancel = $('btnConfirmCancel');
+    // P7 的页脚与弹层。二维码遮罩在 view.js 里也有自己的一份引用，
+    // 这里再取一次是为了让 Esc 能在同一个地方按顺序关掉所有层。
+    el.qrMask = $('qrMask');
+    el.btnHelp = $('btnHelp');
+    el.helpPanel = $('helpPanel');
+    el.btnSelfCheck = $('btnSelfCheck');
+    el.selfcheckPanel = $('selfcheckPanel');
+    el.selfcheckSummary = $('selfcheckSummary');
+    el.selfcheckList = $('selfcheckList');
+    el.onboardMask = $('onboardMask');
+    el.btnOnboardOk = $('btnOnboardOk');
   }
 
   function restore() {
@@ -733,6 +995,11 @@
     bindTabs();
     bindCopy();
     bindShortcuts();
+    bindFooter();
+
+    // 引导放在所有绑定之后：这样「知道了」和 Esc 都已经可用，
+    // 不会出现「弹出来了但点不掉」的一瞬间。
+    maybeOnboard();
 
     return state;
   }
