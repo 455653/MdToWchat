@@ -1448,3 +1448,232 @@ html.is-copy-mode .dragmask { display: none; }
   .footer-panel-body { padding: 14px 14px 18px; }
   .onboard-card { padding: 16px 16px 14px; }
 }
+
+/* ==========================================================================
+   二期 P6：分步条与版本面板
+   steps-* 是分步条（流程状态机），hist-* 是「版本」面板。
+   ========================================================================== */
+
+/* ---------- 分步条 ---------- */
+
+/* 位置：顶栏与参数条之下、主区之上。
+   它是一条「我在哪、下一步是什么」的常驻指示，所以不收起、不折叠。 */
+.steps {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  background: var(--ui-panel);
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.steps-track {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 每一步一个胶囊。已完成的用实心强调色，当前用的描边加重，
+   未到的保持灰——三种状态一眼可分辨，而不是靠读文字。 */
+.step {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--ui-muted);
+  background: var(--ui-panel);
+}
+
+.step-no { font-size: 12.5px; }
+.step-label { white-space: nowrap; }
+
+.step.is-done {
+  border-color: #bcd7f5;
+  background: #eef5fd;
+  color: #2b6cb0;
+}
+
+.step.is-active {
+  border-color: var(--ui-accent);
+  color: #ffffff;
+  background: var(--ui-accent);
+  font-weight: 600;
+}
+
+/* 两个胶囊之间的小箭头。用 ::after 画，不额外塞元素——
+   它纯粹是装饰，进 DOM 只会让「读屏器念一遍流程」变成噪音。 */
+.step + .step::before {
+  content: '›';
+  margin-right: 2px;
+  color: var(--ui-border-strong);
+}
+
+.steps-side {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* 提示语占满剩下的宽度；窄屏时它会自己换行到下一行 */
+.steps-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--ui-muted);
+}
+
+/* 第 2 步的询问条。刻意做成「条」而不是弹框：
+   它问的是流程里的一步，不是一个需要挡住全屏的对话。 */
+.steps-ask {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-basis: 100%;
+  padding: 8px 12px;
+  border: 1px solid #ffe0a8;
+  border-radius: 6px;
+  background: #fffaf0;
+}
+
+.steps-ask-text { flex: 1 1 auto; font-size: 12.5px; line-height: 1.7; color: #7a5300; }
+/* 已选「需要」之后换成说明态：不再是个待回答的问题，去掉警示色 */
+.steps-ask.is-note { border-color: var(--ui-border); background: #f7f8fa; }
+.steps-ask.is-note .steps-ask-text { color: var(--ui-muted); }
+
+/* ---------- AI 润色区（P7） ---------- */
+
+/* 位置与分步条同一层：紧贴在它下面。它只在「第 2 步 + 答了『需要』」时出现，
+   显隐由 JS 控制（hidden 属性），这里只管长什么样。 */
+.polish {
+  flex: 0 0 auto;
+  padding: 10px 14px;
+  background: var(--ui-panel);
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.polish-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 960px;
+}
+
+.polish-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.polish-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ui-text);
+  white-space: nowrap;
+}
+
+/* 状态说明占满剩下的宽度：它长短差别很大（一句话 → 整段错误原因） */
+.polish-status {
+  flex: 1 1 260px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ui-muted);
+}
+
+.polish-actions { display: flex; align-items: center; gap: 8px; }
+
+/* 流式内容窗。刻意限高 + 可滚动：润色一篇长文时这里是全文，
+   让它无限撑高会把下面的编辑区挤出屏幕。 */
+.polish-live {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+  background: #f7f8fa;
+  font-family: Consolas, "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #4a4f57;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 「超过 180 秒，先停在这里」这类收尾说明。用警示色而不是错误色：
+   它不是失败，是「这一版能用，但还差后半段」。 */
+.polish-note {
+  padding: 7px 10px;
+  border: 1px solid #ffe0a8;
+  border-radius: 6px;
+  background: #fffaf0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ui-warn);
+}
+
+.polish-error {
+  padding: 7px 10px;
+  border: 1px solid #f3c9c5;
+  border-radius: 6px;
+  background: #fdf3f2;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ui-danger);
+}
+
+/* ---------- 版本面板 ---------- */
+
+.hist-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-width: 960px;
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.hist-item {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--ui-border);
+  font-size: 12.5px;
+  color: var(--ui-text);
+  background: var(--ui-panel);
+}
+.hist-item:last-child { border-bottom: 0; }
+
+/* 编辑区「基于」的那一版：左侧色条说明「你手上的内容从这里来」。
+   用 inset box-shadow 而不是 border-left，理由与 pan-item 一致（不改变盒宽）。 */
+.hist-item.is-cursor { box-shadow: inset 3px 0 0 var(--ui-accent); }
+
+.hist-seq { flex: 0 0 42px; font-weight: 600; color: var(--ui-accent); }
+.hist-origin { flex: 0 0 72px; color: var(--ui-muted); }
+.hist-chars { flex: 0 0 72px; color: var(--ui-muted); }
+.hist-time { flex: 0 0 auto; color: var(--ui-muted); }
+.hist-flag { margin-left: auto; font-size: 11.5px; color: var(--ui-accent); }
+
+/* ---------- 二期的窄屏补丁 ---------- */
+
+@media (max-width: 800px) {
+  /* 窄屏下分步条挤不下四格加两个按钮：把两个按钮挪到下一行，提示语先收起来。 */
+  .steps { gap: 8px; padding: 8px 10px; }
+  .steps-side { margin-left: 0; flex-basis: 100%; }
+  .steps-hint { display: none; }
+  .hist-item { flex-wrap: wrap; gap: 6px 10px; }
+  .hist-flag { margin-left: 0; flex-basis: 100%; }
+}

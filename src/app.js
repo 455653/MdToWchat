@@ -296,6 +296,31 @@
     renderPreview().then(function () { MW.view.resetScroll(); });
     // 落盘不等渲染：存的是 md 原文，与产物无关。
     if (opts.immediate) saveNow(); else saveDebounced();
+
+    // 二期：告诉分步条「这是一次导入」。它据此走第 2 步的询问；
+    // 手敲文字不算导入，所以只认 fromFile。「什么时候发生了一次导入」
+    // 只有这里知道——让分步条自己去猜（例如监听 input）一定会猜错。
+    if (opts.fromFile) document.dispatchEvent(new CustomEvent('mw:import'));
+  }
+
+  /**
+   * 只替换编辑区正文，不动文件名 / 编码 / hasFile。
+   * 二期的「回溯上一步」用它把上一个版本的正文写回来——那是编辑动作，
+   * 不该顺带把「已载入文件」这个状态抹掉（那会让顶栏的虚线框重新出现）。
+   *
+   * 返回这次渲染的产物（Promise<产物 | null>）。润色面板要拿它读 meta.dropped，
+   * 才知道有没有「会被公众号整块丢掉」的写法、要不要接着跑修订那一轮
+   * （PLAN-II.md §9 的「前端算 + 回传」）。「回溯上一步」不接这个返回值，行为不变。
+   */
+  function setText(text) {
+    el.input.value = text == null ? '' : text;
+    // 落盘不等渲染：存的是 md 原文，与产物无关。
+    saveNow();
+    return renderPreview().then(function (out) {
+      // 滚动重置得等产物真的挂上去，否则量到的是上一份文档的高度。
+      MW.view.resetScroll();
+      return out;
+    });
   }
 
   /* ==================== 输入通路 ==================== */
@@ -933,6 +958,9 @@
     el.renderBarFill = $('renderBarFill');
     el.auditHost = $('auditHost');
     el.reportHost = $('reportHost');
+    el.historyHost = $('historyHost');
+    el.polishHost = $('polishHost');
+    el.stepsHost = $('stepsHost');
     el.btnCopy = $('btnCopy');
     el.btnCopySrc = $('btnCopySrc');
     el.btnCopyPage = $('btnCopyPage');
@@ -986,6 +1014,11 @@
 
     MW.panels.audit.init(el.auditHost);
     MW.panels.report.init(el.reportHost);
+    // 二期：分步条要排在版本面板之前——面板渲染时会读 MW.steps 判断
+    // 「现在第几步」，反过来依赖会让首帧读到空的步骤状态。
+    MW.steps.init(el.stepsHost);
+    MW.panels.history.init(el.historyHost);
+    MW.panels.polish.init(el.polishHost);
 
     bindInput();
     bindFilePicker();
@@ -1009,6 +1042,12 @@
     loadFile: loadFile,
     applyText: applyText,
     renderPreview: renderPreview,
+    /** 读编辑区正文。二期的分步条与版本面板都只认这一个入口。 */
+    text: function () { return el.input.value; },
+    /** 只换正文（回溯上一步用），不动文件名与「已载入文件」。 */
+    setText: setText,
+    /** 把当前正文存回本地。版本面板的「保存这份 md」复用它，避免两份下载逻辑。 */
+    saveToFile: saveToFile,
     /** 最近一次管线产物，供控制台与后续面板取用 */
     result: function () { return lastResult; },
     state: state

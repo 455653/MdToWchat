@@ -2,7 +2,11 @@
 
 把 Markdown 转成「能直接粘进微信公众号图文编辑器、且不会被吃掉样式」的富文本。
 
-纯前端、零构建、离线可用：**双击 `index.html` 就能用**，不 `npm install`、不起服务、不引 CDN。
+核心是纯前端、零构建、离线可用：**双击 `index.html` 就能用**，不 `npm install`、不起服务、不引 CDN。
+
+二期的 AI 润色与版本历史是**可选的本地增强**：想用就双击 `serve.cmd`（需本机有 Python 3）；后端不在也不影响编辑、预览、复制——那条「不需要 AI」的快路径从发起到复制不会发出一个 `/agent` 请求。
+
+> **状态**：一期（P0–P7）与二期（P6 → P7 → B1 → B2 → B3）均已交付并验收。二期刻意只做到「单轮润色 + 最多一轮兼容性修订」，更完整的「五步 agentic」按规划暂缓。
 
 ---
 
@@ -31,6 +35,13 @@
 - **丢失样式登记**：在手机上发现丢样式时，把现象、设备、已排除项记成一条规则，自动生成可直接交给开发 AI 的修复提示词；规则存 `localStorage` 并回灌进渲染管线。
 - **首次使用引导 + 页脚说明**：三步覆盖层带新用户走一遍；页脚「怎么用」常驻「出问题时去哪儿看」的完整流程与踩坑提示。
 
+### 二期新增（可选的本地增强）
+
+- **顶部分步条**：把流程显式成「① 导入 → ② 润色 → ③ 编辑定稿 → ④ 转格式」四格；第 2 步问一次「要不要 AI 润色」，选「不需要」就直接跳到④，整条链路退化成一期，不连后端。
+- **AI 润色（流式）**：接 DeepSeek，把草稿按公众号体裁重写；逐段流式可见，可中途取消。润色结果先灌进编辑区，**点了「保存」才落库**（`origin='ai_polish'` 并挂上那一次 run）。
+- **版本仓库**：SQLite 落盘的历史版本，支持「保存这份 md」「回溯上一步」与下载；「进入编辑区即版本 1，点保存才 +1」。
+- **运行护栏**：整条链 180 秒上限、单步 120 秒、总 token 预算、最多修订 1 轮、显式取消（幂等）、靠 `agent_steps.idx` 的中断续跑——全部留证据在库里，可随时回查。
+
 ## 快速开始
 
 ### 日常使用
@@ -47,6 +58,15 @@
 3. 回到 `index.html` 点「手机预览」，用手机扫二维码打开 `?mode=preview` 的只读页。
 
 > 服务端内容只放在内存里，关掉窗口即结束，不留后台进程；二维码完全本机生成，内网地址不会发给任何在线服务。
+
+### AI 润色与版本历史（二期）
+
+1. 双击 `serve.cmd`——同一个服务同时提供 `/sync` 与 `/agent/*`（版本仓库落 SQLite，润色走 DeepSeek）。
+2. 在 `agent/config.json` 里填 `apiKey`（与 `model`）。该文件已在 `.gitignore` 里，API Key 不会进仓库。
+3. 回到页面：第 2 步选「需要 AI 润色」→ 点「开始润色」，逐段流式出稿，中途可取消。选「不需要」则整条链路不碰后端。
+4. 稿子先落在左侧编辑区（**不落库**）；确认后去右栏「版本」点「保存这份 md」才记一版。
+
+> 改过 `agent/` 里的 Python 后要**重启 `serve.cmd`** 才生效（不热加载）；改前端 `src/` 刷新页面即可。
 
 ## 工作原理
 
@@ -83,9 +103,15 @@ parse（markdown-it）
 
 ```
 index.html              唯一入口（双击即用）
-serve.cmd / serve.py    局域网真机预览服务（/sync 同步通道）
-PLAN.md                 完整设计文档（六条硬约束、阶段划分、关键决策）
-PLAN-II.md              第二期规划：Agent 层（AI 润色 + 版本历史），尚未动手
+serve.cmd / serve.py    本地服务：局域网真机预览（/sync）+ 二期后端（/agent/*，AI 润色与版本仓库）
+PLAN.md                 一期设计文档（六条硬约束、阶段划分、关键决策）
+PLAN-II.md              二期设计文档（AI 润色 + 版本历史，阶段与验收见 §13 / §14）
+agent/                  二期后端（零 pip 依赖，标准库 urllib + 手写 SSE）
+  llm.py                DeepSeek 客户端（流式 SSE、增量 UTF-8 解码）
+  prompts.py            润色提示词与 PROMPT_VERSION
+  routes.py             /agent/polish /agent/save /agent/versions /agent/runs /agent/cancel
+  store.py              SQLite：docs / versions / agent_runs / agent_steps
+  config.json           本地配置（API Key 与模型，已在 .gitignore 里）
 vendor/                 离线第三方库（UMD，随仓库走，不引 CDN）
 src/
   theme.css             主题变量 + 应用外壳样式
@@ -98,16 +124,18 @@ src/
   sanitize.js           归一器
   clipboard.js          剪贴板（富文本两层降级）
   sync.js               局域网同步通道
+  agent-client.js       /agent/* 通道 + 流式润色（fetch + ReadableStream 手解 SSE）
+  steps.js              顶部分步条（二期唯一的流程状态机）
   view.js               双栏预览 / 大纲 / 二维码 / 空态与错误态
   preview-mode.js       只读预览页与纯净复制页
   selfcheck.js          页内自检（A1–A10 断言，与 test/assert.html 同标准）
   app.js                引导与事件绑定（最后加载）
-  panels/               主题参数 / 样式体检 / 丢失样式登记 三个面板
+  panels/               主题参数 / 样式体检 / 丢失样式登记 / 版本 / AI 润色 五个面板
 fixtures/               12 个回归样本 md
 test/assert.html        浏览器内断言台
 ```
 
-脚本加载顺序固定为 `util → whitelist → compat-rules → vendor/* → pipeline → media → inline-styles → sanitize → clipboard → sync → panels/* → view → preview-mode → selfcheck → app`。`util.js` 必须最先、`app.js` 必须最后。
+脚本加载顺序固定为 `util → whitelist → compat-rules → vendor/* → pipeline → media → inline-styles → sanitize → clipboard → sync → agent-client → panels/settings → panels/audit → panels/report → steps → panels/history → panels/polish → view → preview-mode → selfcheck → app`。`util.js` 必须最先、`app.js` 必须最后；`agent-client.js` 排在三处二期面板之前（它们都用 `MW.agent`），`steps.js` 排在 `panels/polish.js` 之前（润色区运行时读 `MW.steps`）。
 
 ## 六条硬约束
 
@@ -117,6 +145,8 @@ test/assert.html        浏览器内断言台
 4. 第三方库放 `vendor/`，必须 UMD、离线可用，禁止 CDN。
 5. 不引任何框架，只用原生 DOM 与原生 CSS。
 6. 除 Mermaid（约 3.2MB）与 MathJax（约 2MB）按需懒加载外，首屏 1 秒内可交互。
+
+二期的 AI 润色与版本历史**不改这六条**：后端是可选增强，探测不到就降级，编辑、预览、复制一字不减；`fetch` 只用于 `http://localhost` 上的 `/sync` 与 `/agent/*`，从不读本地文件（硬约束 3）。
 
 ## 兼容规则表（核心资产）
 

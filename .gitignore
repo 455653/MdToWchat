@@ -9,3 +9,13 @@
 # 系统文件
 Thumbs.db
 .DS_Store
+
+# Python 编译产物
+__pycache__/
+*.pyc
+
+# 版本仓库（本地 SQLite：单机数据，不入库）
+agent/data/
+
+# 本地配置（含 DeepSeek API Key：绝不能进仓库）
+agent/config.json

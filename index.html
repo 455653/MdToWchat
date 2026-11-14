@@ -59,6 +59,20 @@
     <button type="button" class="btn btn-ghost" id="btnResetTheme">恢复默认</button>
   </section>
 
+  <!--
+    二期的分步条：① 导入 → ② 润色 → ③ 编辑定稿 → ④ 转格式。
+    只有四格，流程却有七步——四格是给人看的粒度，映射见 PLAN-II.md §1。
+    它是二期唯一的流程状态机（src/steps.js），别的面板不许自己判断「现在第几步」。
+  -->
+  <section class="steps" id="stepsHost"></section>
+
+  <!--
+    二期的 AI 润色区（P7）。默认 hidden，显不显示由 src/panels/polish.js 自己按
+    「第 2 步 + 用户答了『需要』」判断（状态一律问 MW.steps）。
+    它属于「现在这一步要做什么」，所以跟着分步条走，而不是右栏里的一个 tab。
+  -->
+  <section class="polish" id="polishHost" hidden></section>
+
   <main class="main">
     <!-- 左：Markdown 输入区 -->
     <section class="pane pane-input">
@@ -72,6 +86,7 @@
         <button type="button" class="tab is-active" data-tab="preview">预览</button>
         <button type="button" class="tab" data-tab="audit">体检</button>
         <button type="button" class="tab" data-tab="report">登记</button>
+        <button type="button" class="tab" data-tab="history">版本</button>
       </nav>
 
       <div class="tabbody">
@@ -169,6 +184,10 @@
 
         <div class="tabpanel" data-panel="report">
           <div class="panel-slot" id="reportHost"></div>
+        </div>
+
+        <div class="tabpanel" data-panel="history">
+          <div class="panel-slot" id="historyHost"></div>
         </div>
       </div>
     </section>
@@ -336,6 +355,12 @@
   selfcheck.js 只定义一份数据（十条断言），不产生任何副作用、不碰 DOM，
   所以在 app.js 之前加载即可；它刻意放在最后一批，远离 pipeline，
   因为「断言」是消费产物的东西，不该出现在生产链路的上游。
+
+  二期的四个文件同样排在 app.js 之前：app.js 的 init() 会调用
+  MW.steps.init()、MW.panels.history.init() 与 MW.panels.polish.init()，
+  它们必须先注册好自己。
+  agent-client 排在 steps / history / polish 之前，因为三者都要用 MW.agent；
+  polish 排在 steps 之后，因为它要在运行时读 MW.steps 判断现在第几步。
 -->
 <script src="src/util.js"></script>
 <script src="src/whitelist.js"></script>
@@ -351,9 +376,13 @@
 <script src="src/sanitize.js"></script>
 <script src="src/clipboard.js"></script>
 <script src="src/sync.js"></script>
+<script src="src/agent-client.js"></script>
 <script src="src/panels/settings.js"></script>
 <script src="src/panels/audit.js"></script>
 <script src="src/panels/report.js"></script>
+<script src="src/steps.js"></script>
+<script src="src/panels/history.js"></script>
+<script src="src/panels/polish.js"></script>
 <script src="src/view.js"></script>
 <script src="src/preview-mode.js"></script>
 <script src="src/selfcheck.js"></script>

@@ -13,9 +13,16 @@ mw.doc，所以必须有一个两台设备都能访问的中间点。http.server
                        rev 变了才回 {doc, name, theme}，手机端据此重渲染。
   POST /sync           电脑端每次落盘后把 {rev, doc, name, theme} 发上来。
 
+二期 P6 起还多了一组 /agent/*（文章版本仓库），由同目录的 agent/routes.py 处理。
+本文件只做转发：把路径、查询串、JSON 体递过去，拿回 (状态码, 对象) 就写出去。
+它和 /sync 一样带「不需要也能不要」的性质——agent/ 目录删掉只是这组接口消失，
+预览、复制、/sync 一字不受影响（PLAN-II.md 第 2 节）。
+
 其余路径一律按本目录下的静态文件处理，行为和 http.server 一致。
-内容只放在内存里：关掉窗口服务就结束了，磁盘上不会留下任何同步文件，
+/sync 的内容只放在内存里：关掉窗口服务就结束了，磁盘上不会留下任何同步文件，
 也不存在「关了窗口还在后台跑」的情况。
+/agent/* 则是唯一会写磁盘的东西，落在同目录 agent/data/mw.db（SQLite）；
+不点保存就不写库，删掉这个文件即清空版本历史。
 
 为什么所有中文都在这个文件里，而不是放进 serve.cmd：
   cmd.exe 是按「字节偏移」跟踪批处理文件读到哪了的。serve.cmd 里一旦出现
@@ -38,6 +45,16 @@ import sys
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
+
+# /agent/* 的后端。特意裹在 try 里：agent/ 被删掉时 serve.py 仍然要能起，
+# 只是这组接口消失——「后端是可选的」这条约束，对 serve.py 自己也成立。
+try:
+    from agent import routes as agent_routes
+    from agent import store as agent_store
+except Exception as err:  # 只在 agent/ 缺失或损坏时触发
+    agent_routes = None
+    agent_store = None
+    print('[提示] agent 后端未加载（%s）；/agent/* 不可用，/sync 与静态文件不受影响。' % err)
 
 DEFAULT_PORT = 8000
 # serve.py 和 index.html 在同一层目录：静态服务的根就是脚本所在目录
@@ -129,6 +146,65 @@ class Handler(SimpleHTTPRequestHandler):
                 data['theme'] = STORE['theme']
             return data
 
+    def dispatch_agent(self, method, parts, body=None):
+        """把 /agent/* 交给 agent/routes.py。返回 True 表示已经写过响应。
+
+        route() 对「路径不在它表里」回 None——这时本方法回 False，
+        调用方落回自己的规则（GET 走静态文件、POST 回 404），
+        这样 /agent/ 下多一个没实现的路径不会被当成静态文件去 404 得莫名其妙。
+
+        payload 里带 'stream' 键（只有 /agent/polish 成功时如此）就走 SSE。
+        这是 routes.py 与 HTTP 层之间唯一的一条特殊约定：它说明「这个接口不回 JSON」。
+        """
+        if agent_routes is None:
+            return False
+        got = agent_routes.route(method, parts.path, parse_qs(parts.query), body)
+        if got is None:
+            return False
+        status, payload = got
+        if isinstance(payload, dict) and payload.get('stream') is not None:
+            self.stream_events(payload['stream'], status)
+        else:
+            self.send_json(payload, status)
+        return True
+
+    def stream_events(self, events, status=200):
+        """把一串事件写成 text/event-stream（PLAN-II.md §8.2）。
+
+        为什么不用 chunked 编码（PLAN-II.md §12 第 1 条）：
+          本处理器是 HTTP/1.1。上面有 end_headers() 会给每个响应加几个头，
+          但它不加 Content-Length 也不加 Transfer-Encoding——那种情况下
+          客户端会一直等下去（它不知道正文到哪儿算完）。两条出路里选了
+          「Connection: close」：连接关闭本身就是结束信号，一行都不用自己算分块。
+          代价是每次润色一条新连接，而润色本来就不是高频操作。
+
+        为什么每条都要 flush：
+          wfile 在 Python 3 里是无缓冲的，但 flush 是「不依赖那个实现细节」的写法——
+          这一段的全部意义就是「逐段可见」，被任何一层缓冲攒住都会退化成最后一次性出现。
+        """
+        self.close_connection = True
+        self.send_response(status)
+        self.send_header('Content-Type', 'text/event-stream; charset=utf-8')
+        self.send_header('Connection', 'close')
+        # 万一将来被套在 nginx 之类后面，这一行让它也别攒着
+        self.send_header('X-Accel-Buffering', 'no')
+        self.end_headers()
+
+        try:
+            for event in events:
+                frame = 'data: ' + json.dumps(event, ensure_ascii=False) + '\n\n'
+                self.wfile.write(frame.encode('utf-8'))
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            # 用户关页或点了「取消」：连接已经没了，这里只需安静退出。
+            # 真正要紧的收尾（把 run 标成 canceled、释放全局锁）在生成器的
+            # finally 里，下面这句 close() 就是去触发它。
+            pass
+        finally:
+            close = getattr(events, 'close', None)
+            if close is not None:
+                close()
+
     # ------------------------------------------------------------------ 路由
 
     def do_OPTIONS(self):
@@ -140,6 +216,9 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parts = urlsplit(self.path)
+        # /agent/* 先试；不在它的表里再落回 /sync 与静态文件
+        if parts.path.startswith('/agent/') and self.dispatch_agent('GET', parts):
+            return
         if parts.path != '/sync':
             return super().do_GET()
 
@@ -149,8 +228,10 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_json(self.snapshot(include_body=not unchanged))
 
     def do_POST(self):
-        if urlsplit(self.path).path != '/sync':
-            self.send_json({'ok': False, 'error': '只有 /sync 接受 POST'}, 404)
+        parts = urlsplit(self.path)
+        is_agent = parts.path.startswith('/agent/')
+        if not is_agent and parts.path != '/sync':
+            self.send_json({'ok': False, 'error': '只有 /sync 与 /agent/* 接受 POST'}, 404)
             return
 
         raw_length = self.headers.get('Content-Length')
@@ -168,6 +249,12 @@ class Handler(SimpleHTTPRequestHandler):
             return
         if not isinstance(data, dict):
             self.send_json({'ok': False, 'error': '内容必须是 JSON 对象'}, 400)
+            return
+
+        if is_agent:
+            # 体已经拆成 dict 了；/agent/ 下没登记的路径才回 404
+            if not self.dispatch_agent('POST', parts, data):
+                self.send_json({'ok': False, 'error': '未知的 /agent 接口：%s' % parts.path}, 404)
             return
 
         with LOCK:
@@ -204,10 +291,42 @@ def main():
     ip = lan_ip()
     mobile = lan_url(port)
 
+    # 版本仓库：建表是幂等的，起服务时顺手做一次；失败只影响 /agent/*，
+    # 预览与 /sync 照常——「后端可选」不因为一个建表失败就整体打不开。
+    store_ready = False
+    if agent_routes is not None:
+        try:
+            agent_routes.init()
+            store_ready = True
+        except Exception as err:
+            print('  [注意] 版本仓库初始化失败：%s' % err)
+            print('         文章版本功能不可用；预览与 /sync 不受影响。')
+
     print('')
     print('  MdWeChat 局域网预览已启动')
     print('  本机访问   : http://localhost:%d/' % port)
     print('  手机预览   : %s' % mobile)
+    if store_ready:
+        print('  版本仓库   : %s' % agent_store.DB_PATH)
+    elif agent_routes is None:
+        print('  版本仓库   : 未启用（agent/ 未加载）')
+
+    # AI 润色是不是能用，这里要如实说，而且要说清 Key 是从哪读到的。
+    # 理由：改过 agent/config.json 却没生效时，用户唯一能自己排查的线索就是这一行——
+    # 只写「已启用」，他会以为新 Key 已经生效，然后拿着 401 一路找错方向。
+    if agent_routes is not None:
+        try:
+            from agent import llm as agent_llm
+            source = agent_llm.key_source()
+            if source:
+                print('  AI 润色    : 已启用（模型 %s，Key 来自 %s）'
+                      % (agent_llm.model(), source))
+            else:
+                print('  AI 润色    : 未配置 API Key（在 agent/config.json 里填 apiKey，'
+                      '重启本服务生效；不配也能手动编辑与转格式）')
+        except Exception as err:
+            print('  AI 润色    : 未启用（%s）' % err)
+
     if ip == '127.0.0.1':
         print('  [注意] 没有取到局域网地址，只能在电脑本机看。')
         print('         请确认已连上 WiFi 或网线，并关掉会拦截网络的代理软件。')
